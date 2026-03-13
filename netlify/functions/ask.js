@@ -37,6 +37,6 @@ SOLO JSON:
     JSON.parse(clean); // validate before returning
     return { statusCode: 200, headers: { "Content-Type": "application/json" }, body: clean };
   } catch (e) {
-    return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
+    return { statusCode: 500, body: JSON.stringify({ error: e.message, stack: e.stack, key_set: !!process.env.ANTHROPIC_API_KEY }) };
   }
 };
