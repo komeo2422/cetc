@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#111111"/>
+
+<!-- PWA / iOS -->
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Calciatore"/>
+<link rel="apple-touch-icon" href="/icon-192.png"/>
+<link rel="manifest" href="/manifest.json"/>
+
+<title>Chi è questo calciatore?</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'Inter',system-ui,sans-serif;background:#fff;color:#111}
+#app{max-width:480px;margin:0 auto;padding:env(safe-area-inset-top,24px) 16px 24px;min-height:100dvh}
+input,button{font-family:inherit}
+.lbl{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#aaa;margin-bottom:8px;font-weight:700;display:block}
+.inp{width:100%;padding:13px 14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:16px;outline:none;margin-bottom:12px;color:#111}
+.inp:focus{border-color:#999}
+.btn1{width:100%;padding:15px 0;background:#111;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:10px}
+.btn2{width:100%;padding:13px 0;background:#fff;color:#555;border:1.5px solid #e8e8e8;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer}
+.btn-ghost{flex:1;padding:12px 0;background:#fff;color:#ccc;border:1.5px solid #ebebeb;border-radius:10px;font-size:13px;cursor:pointer}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{padding:8px 10px;color:#bbb;font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;background:#f7f7f7;text-align:left}
+th.r,td.r{text-align:center}
+td{padding:8px 10px;border-top:1px solid #f0f0f0}
+.pill{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;padding:3px 9px;border-radius:5px;font-weight:700}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+.shake{animation:shake .4s}
+.hint{display:flex;gap:10px;padding:9px 12px;background:#f8f8f8;border:1px solid #ebebeb;border-radius:8px;font-size:13px;margin-bottom:6px}
+.hint-lbl{color:#bbb;font-weight:700;min-width:76px;font-size:10px;letter-spacing:1px;text-transform:uppercase;flex-shrink:0;padding-top:1px}
+.rbox{padding:14px 16px;border-radius:10px;margin-bottom:14px}
+.rok{background:#f0faf0;border:1.5px solid #c8e6c9}
+.rko{background:#fff5f5;border:1.5px solid #ffcdd2}
+.lbrow{display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:10px;margin-bottom:8px}
+.statbox{text-align:center;padding:14px 8px;border:1.5px solid #ebebeb;border-radius:10px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const LS = localStorage;
+const TIERS = [
+  {name:'Giuseppe Pastore',min:2.5,emoji:'🏆',desc:'Memoria enciclopedica. Sei un fenomeno assoluto.'},
+  {name:'Esperto',min:1.75,emoji:'⚽',desc:'Conosci il calcio come pochi. Chapeau.'},
+  {name:'Professionista',min:1.0,emoji:'🎽',desc:'Buona conoscenza del mondo del pallone.'},
+  {name:'Dilettante',min:0,emoji:'📺',desc:'Guardi il calcio solo quando gioca la Nazionale?'},
+];
+const DIFFS  = ['Facile','Intermedio','Difficile'];
+const HLBLS  = ['Ruolo','Nazionalità','Episodio'];
+const DC     = {Facile:{bg:'#e8f5e9',c:'#2e7d32'},Intermedio:{bg:'#fff8e1',c:'#e65100'},Difficile:{bg:'#fce4ec',c:'#b71c1c'}};
+
+// ── STATE ──────────────────────────────────────────────────────────────
+const savedUser = LS.getItem('cetc_user') || '';
+const S = {
+  screen: savedUser ? 'home' : 'setname',
+  username: savedUser,
+  player: null, nextPlayer: null, diff: '',
+  hints:[false,false,false], attempts:0, answer:'', result:null,
+  score:0, q:0, err:null
+};
+
+// ── HELPERS ────────────────────────────────────────────────────────────
+function nrm(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').trim()}
+function rndD(){return DIFFS[Math.floor(Math.random()*3)]}
+function tier(avg){return TIERS.find(t=>avg>=t.min)||TIERS[3]}
+
+// ── API ────────────────────────────────────────────────────────────────
+async function fetchPlayer(diff){
+  const r = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({diff})});
+  if(!r.ok) throw new Error('API error');
+  return r.json();
+}
+function prefetch(){
+  const d=rndD();
+  fetchPlayer(d).then(p=>{S.nextPlayer={player:p,diff:d}}).catch(()=>{});
+}
+async function loadQ(){
+  S.hints=[false,false,false];S.attempts=0;S.answer='';S.result=null;S.err=null;
+  if(S.nextPlayer){
+    S.player=S.nextPlayer.player;S.diff=S.nextPlayer.diff;S.nextPlayer=null;
+    S.screen='playing';render();prefetch();
+  } else {
+    S.screen='loading';render();
+    const d=rndD();S.diff=d;
+    try{S.player=await fetchPlayer(d);S.screen='playing';prefetch();}
+    catch{S.err='Errore caricamento. Riprova.';S.screen='home';}
+    render();
+  }
+}
+
+// ── LEADERBOARD ────────────────────────────────────────────────────────
+async function lbLoad(){
+  try{const r=await fetch('/api/scores');return r.ok?r.json():[];}catch{return[];}
+}
+async function lbSave(pts){
+  try{await fetch('/api/scores',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:S.username,pts})});}
+  catch(e){console.warn('lb',e);}
+}
+
+// ── GAME ───────────────────────────────────────────────────────────────
+function checkAns(){
+  const ans=S.answer.trim();if(!ans||!S.player||S.result)return;
+  const n=nrm(ans);
+  const ok=[S.player.nome,...(S.player.nomi_alternativi||[])].map(nrm)
+    .some(a=>n===a||a.split(' ').some(w=>w.length>3&&n===w));
+  if(ok){
+    const pts=Math.max(0,3-S.attempts);
+    S.result={correct:true,pts};S.score+=pts;S.q++;lbSave(pts);
+  } else {
+    const na=S.attempts+1;
+    if(na<=3)S.hints[na-1]=true;
+    S.attempts=na;S.answer='';
+    if(na>=3){S.result={correct:false,pts:0};S.q++;lbSave(0);}
+    else{
+      const el=document.getElementById('ai');
+      if(el){el.classList.add('shake');el.style.borderColor='#e53935';
+        setTimeout(()=>{el.classList.remove('shake');el.style.borderColor='#e0e0e0'},400);}
+    }
+  }
+  render();
+}
+function surrender(){if(S.result)return;S.result={correct:false,pts:0};S.q++;lbSave(0);render();}
+
+// ── SCREENS ────────────────────────────────────────────────────────────
+function scSetname(){return`
+  <div style="display:flex;flex-direction:column;justify-content:center;min-height:90dvh;padding:20px 0">
+    <div style="text-align:center;margin-bottom:36px">
+      <div style="font-size:52px;margin-bottom:12px">⚽</div>
+      <h1 style="font-size:26px;font-weight:800;margin-bottom:6px;letter-spacing:-.5px">Chi è questo calciatore?</h1>
+      <p style="color:#999;font-size:14px">Indovina il calciatore dalla sua carriera in Serie A</p>
+    </div>
+    <span class="lbl">Come ti chiami?</span>
+    <input id="i-user" class="inp" type="text" placeholder="Il tuo nome..." autocomplete="nickname"/>
+    <p style="font-size:11px;color:#bbb;margin-top:-6px;margin-bottom:20px">Verrà salvato sul dispositivo — non ti verrà più chiesto</p>
+    ${S.err?`<p style="color:#c62828;font-size:13px;margin-bottom:12px;text-align:center">${S.err}</p>`:''}
+    <button class="btn1" id="btn-savename">Inizia a giocare →</button>
+  </div>
+`;}
+
+function scHome(){return`
+  <div style="text-align:center;margin-bottom:26px;padding-top:16px">
+    <div style="font-size:36px;margin-bottom:8px">⚽</div>
+    <h1 style="font-size:26px;font-weight:800;margin-bottom:4px;letter-spacing:-.5px">Chi è questo calciatore?</h1>
+    <p style="color:#999;font-size:13px">Ciao <b style="color:#111">${S.username}</b> — pronto a giocare?</p>
+  </div>
+  <div style="background:#fafafa;border-radius:10px;padding:14px 16px;margin-bottom:20px">
+    <span class="lbl">Come si gioca</span>
+    <p style="font-size:13px;color:#555;line-height:1.7">
+      Ogni risposta sbagliata sblocca un indizio e scala i punti.<br>
+      <b>1° tentativo</b> = 3pt · <b>2°</b> = 2pt · <b>3°</b> = 1pt · Nessuna = 0pt
+    </p>
+  </div>
+  ${S.err?`<p style="color:#c62828;font-size:13px;margin-bottom:12px;text-align:center">${S.err}</p>`:''}
+  <button class="btn1" id="btn-start">Inizia →</button>
+  <button class="btn2" id="btn-lb">🏆 Classifica globale</button>
+  <p style="font-size:11px;color:#ddd;margin-top:20px;text-align:center;cursor:pointer" id="btn-chname">Cambia nome</p>
+`;}
+
+function scLoading(){return`
+  <div style="display:flex;align-items:center;justify-content:center;min-height:90dvh">
+    <div style="text-align:center;color:#aaa">
+      <div style="font-size:36px;margin-bottom:10px">⚽</div>
+      <div style="font-size:14px">Caricamento...</div>
+    </div>
+  </div>
+`;}
+
+function scPlaying(){
+  const p=S.player;
+  const tot=p.carriera.reduce((a,r)=>({p:a.p+(+r.presenze||0),g:a.g+(+r.gol||0)}),{p:0,g:0});
+  const dc=DC[S.diff]||DC.Intermedio;
+  const over=!!S.result;
+  const al=3-S.attempts;
+
+  const rows=p.carriera.map(r=>`<tr>
+    <td style="color:#999;white-space:nowrap">${r.anni}</td>
+    <td style="font-weight:600">${r.squadra}</td>
+    <td class="r" style="color:#666">${r.presenze}</td>
+    <td class="r" style="color:#666">${r.gol}</td>
+  </tr>`).join('');
+
+  const hints=S.hints.map((on,i)=>on?`<div class="hint">
+    <span class="hint-lbl">${HLBLS[i]}</span>
+    <span style="color:#333;line-height:1.5">${[p.ruolo,p.nazionalita,p.episodio][i]}</span>
+  </div>`:'').join('');
+
+  const bot=over?`
+    <div class="rbox ${S.result.correct?'rok':'rko'}">
+      <div style="font-weight:700;color:${S.result.correct?'#2e7d32':'#c62828'};margin-bottom:4px;font-size:15px">
+        ${S.result.correct?`✓ Corretto! +${S.result.pts} punt${S.result.pts===1?'o':'i'}`:'✗ Non ci sei arrivato'}
+      </div>
+      <div style="font-size:13px;color:#555">Era: <b style="color:#111">${p.nome}</b></div>
+    </div>
+    <button class="btn1" id="btn-next">${S.nextPlayer?'Prossimo →':'Caricamento...'}</button>
+  `:`
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <input id="ai" type="text" placeholder="Nome del calciatore..." value="${S.answer}"
+        style="flex:1;padding:14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:16px;outline:none;color:#111"/>
+      <button id="btn-check" style="padding:14px 18px;background:#111;color:#fff;border:none;border-radius:10px;font-size:20px;cursor:pointer">→</button>
+    </div>
+    <div style="display:flex;gap:8px"><button class="btn-ghost" id="btn-sur">Mi arrendo</button></div>
+  `;
+
+  return`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-top:8px">
+      <span style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#aaa">${S.username}</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${S.q>0?`<span style="font-size:12px;color:#aaa">${S.q} dom.</span>`:''}
+        <span style="font-size:18px;font-weight:800">${S.score}pt</span>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span class="pill" style="background:${dc.bg};color:${dc.c}">${S.diff}</span>
+      ${over?'':`<span style="font-size:13px;color:#888">${al===3?`<b style="color:#111">3pt</b> se indovini ora`:`<b style="color:#111">${al}pt</b> · ${al} tentativ${al===1?'o':'i'}`}</span>`}
+    </div>
+    <div style="border:1px solid #ebebeb;border-radius:10px;overflow:hidden;margin-bottom:14px">
+      <table><thead><tr><th>Anni</th><th>Squadra</th><th class="r">P</th><th class="r">G</th></tr></thead>
+      <tbody>${rows}
+        <tr style="border-top:2px solid #e8e8e8;background:#fafafa">
+          <td colspan="2" style="font-weight:700;font-size:10px;letter-spacing:1px;color:#999;text-transform:uppercase">Totale</td>
+          <td class="r" style="font-weight:800">${tot.p}</td><td class="r" style="font-weight:800">${tot.g}</td>
+        </tr>
+      </tbody></table>
+    </div>
+    ${hints?`<div style="margin-bottom:14px">${hints}</div>`:''}
+    ${bot}
+  `;
+}
+
+async function scLeaderboard(){
+  document.getElementById('app').innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-top:8px">
+      <div>
+        <div style="font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#aaa;margin-bottom:4px">Classifica Globale</div>
+        <h2 style="font-size:22px;font-weight:800">Hall of Fame</h2>
+      </div>
+      <button id="btn-back" style="padding:8px 14px;background:#f5f5f5;border:none;border-radius:8px;font-size:13px;color:#666;cursor:pointer">← Indietro</button>
+    </div>
+    <div id="lb-body"><p style="text-align:center;color:#aaa;padding:30px 0">Caricamento...</p></div>
+  `;
+  document.getElementById('btn-back').onclick=()=>{S.screen=S.q>0?'final':'home';render();};
+  const entries=await lbLoad();
+  document.getElementById('lb-body').innerHTML=entries.length===0
+    ?`<p style="text-align:center;color:#bbb;padding:40px 0;font-size:14px">Nessun punteggio ancora!</p>`
+    :entries.map((e,i)=>{
+      const t=tier(e.avg_score);
+      const me=nrm(e.username)===nrm(S.username);
+      return`<div class="lbrow" style="border:1.5px solid ${me?'#111':'#ebebeb'};background:${me?'#111':'#fafafa'}">
+        <span style="font-size:20px;min-width:28px;text-align:center">${i===0?'🥇':i===1?'🥈':i===2?'🥉':`<span style="color:#ccc;font-weight:800">${i+1}</span>`}</span>
+        <div style="flex:1">
+          <div style="font-weight:700;font-size:15px;color:${me?'#fff':'#111'}">${e.username}${me?' <span style="font-size:11px;color:#888;font-weight:400">(tu)</span>':''}</div>
+          <div style="font-size:11px;color:${me?'#888':'#aaa'};margin-top:2px">${t.emoji} ${t.name} · ${e.total_q} dom.</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:20px;font-weight:800;color:${me?'#fff':'#111'}">${(+e.avg_score).toFixed(2)}</div>
+          <div style="font-size:10px;color:${me?'#888':'#bbb'};text-transform:uppercase;letter-spacing:.5px">pt/dom</div>
+        </div>
+      </div>`;
+    }).join('');
+}
+
+function scFinal(){
+  const avg=S.q>0?S.score/S.q:0;const t=tier(avg);
+  return`
+    <div style="text-align:center;margin-bottom:32px;padding-top:16px">
+      <div style="font-size:52px;margin-bottom:10px">${t.emoji}</div>
+      <div style="font-size:10px;letter-spacing:3px;text-transform:uppercase;color:#aaa;margin-bottom:8px">Il tuo livello</div>
+      <h2 style="font-size:26px;font-weight:800;margin-bottom:4px">${t.name}</h2>
+      <p style="color:#777;font-size:13px;margin-bottom:4px">${t.desc}</p>
+      <p style="color:#bbb;font-size:12px">Punteggio salvato, ${S.username}!</p>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:24px">
+      ${[['Domande',S.q],['Punti',S.score],['Media',avg.toFixed(2)]].map(([l,v])=>`
+        <div class="statbox"><div style="font-size:22px;font-weight:800">${v}</div>
+        <div style="font-size:10px;color:#aaa;margin-top:3px;letter-spacing:.5px;text-transform:uppercase">${l}</div></div>`).join('')}
+    </div>
+    <button class="btn1" id="btn-again">Gioca ancora</button>
+    <button class="btn2" id="btn-lb-f">🏆 Classifica globale</button>
+  `;
+}
+
+// ── RENDER ─────────────────────────────────────────────────────────────
+function render(){
+  if(S.screen==='leaderboard'){scLeaderboard();return;}
+  const map={setname:scSetname,home:scHome,loading:scLoading,playing:scPlaying,final:scFinal};
+  document.getElementById('app').innerHTML=(map[S.screen]||scHome)();
+  bind();
+}
+function bind(){
+  const on=(id,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener('click',fn);};
+
+  on('btn-savename',()=>{
+    const u=document.getElementById('i-user')?.value?.trim();
+    if(!u){S.err='Inserisci il tuo nome.';render();return;}
+    S.username=u;LS.setItem('cetc_user',u);S.err=null;S.screen='home';render();
+  });
+  const iu=document.getElementById('i-user');
+  if(iu)iu.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('btn-savename')?.click();});
+
+  on('btn-start',()=>{S.err=null;loadQ();});
+  on('btn-lb',()=>{S.screen='leaderboard';render();});
+  on('btn-lb-f',()=>{S.screen='leaderboard';render();});
+  on('btn-back',()=>{S.screen=S.q>0?'final':'home';render();});
+  on('btn-chname',()=>{LS.removeItem('cetc_user');S.username='';S.screen='setname';render();});
+  on('btn-again',()=>{S.score=0;S.q=0;S.player=null;S.result=null;S.answer='';S.screen='home';render();});
+  on('btn-next',()=>loadQ());
+  on('btn-check',checkAns);
+  on('btn-sur',surrender);
+
+  const ai=document.getElementById('ai');
+  if(ai){
+    ai.addEventListener('input',e=>{S.answer=e.target.value;});
+    ai.addEventListener('keydown',e=>{if(e.key==='Enter')checkAns();});
+    setTimeout(()=>ai.focus(),50);
+  }
+}
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+render();
+</script>
+</body>
+</html>
