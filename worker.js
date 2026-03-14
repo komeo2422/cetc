@@ -184,6 +184,9 @@ ${content}`, 900, AN_KEY);
       const clean = json.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
       if (parsed.error) throw new Error(parsed.error);
+      if (!parsed.carriera || parsed.carriera.length === 0) throw new Error("empty career");
+      const totalApps = parsed.carriera.reduce((s, r) => s + (r.presenze || 0), 0);
+      if (totalApps === 0) throw new Error("all zero appearances");
       return new Response(JSON.stringify(parsed), { status: 200, headers: CORS });
 
     } catch (e) {
