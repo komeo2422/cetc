@@ -234,7 +234,23 @@ export default {
         assets: !!env.ASSETS,
       }), { status: 200, headers: CORS });
     }
-
+if (path === "/api/testanthropic") {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 10,
+      messages: [{ role: "user", content: "Hi" }],
+    }),
+  });
+  const text = await res.text();
+  return new Response(text, { status: 200, headers: CORS });
+}
     try {
       if (path === "/api/ask"    && method === "POST") return await handleAsk(request, env);
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
