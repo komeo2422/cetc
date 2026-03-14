@@ -1,16 +1,8 @@
-const SB_URL = process.env.SUPABASE_URL;
-const SB_KEY = process.env.SUPABASE_KEY;
-const AN_KEY = process.env.ANTHROPIC_API_KEY;
+const { getStore } = require("@netlify/blobs");
+
+const AN_KEY   = process.env.ANTHROPIC_API_KEY;
 const CACHE_TTL = 60 * 60 * 1000; // 1 ora
 const POOL_SIZE = 50;
-const CACHE_ID  = "pool_v1";
-
-const SB_HEADERS = {
-  apikey: SB_KEY,
-  Authorization: `Bearer ${SB_KEY}`,
-  "Content-Type": "application/json",
-  Prefer: "resolution=merge-duplicates",
-};
 
 // ── CLAUDE ────────────────────────────────────────────────────────────────
 async function askClaude(prompt, maxTokens = 900) {
@@ -32,38 +24,35 @@ async function askClaude(prompt, maxTokens = 900) {
   return data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
 }
 
-// ── SUPABASE POOL ─────────────────────────────────────────────────────────
+// ── NETLIFY BLOBS POOL ────────────────────────────────────────────────────
+function getBlob() {
+  return getStore({ name: "cetc-pool", consistency: "strong" });
+}
+
 async function poolRead() {
-  const res = await fetch(
-    `${SB_URL}/rest/v1/player_cache?id=eq.${CACHE_ID}&select=players,updated_at`,
-    { headers: SB_HEADERS }
-  );
-  const rows = await res.json();
-  if (!rows.length) return { players: [], expired: true };
-  const expired = Date.now() - new Date(rows[0].updated_at).getTime() > CACHE_TTL;
-  return { players: rows[0].players || [], expired };
+  try {
+    const store = getBlob();
+    const raw = await store.get("pool", { type: "json" });
+    if (!raw) return { players: [], expired: true };
+    const expired = Date.now() - new Date(raw.updated_at).getTime() > CACHE_TTL;
+    return { players: raw.players || [], expired };
+  } catch { return { players: [], expired: true }; }
 }
 
 async function poolWrite(players, resetTimer = false) {
-  const body = { id: CACHE_ID, players };
-  if (resetTimer) body.updated_at = new Date().toISOString();
-  await fetch(`${SB_URL}/rest/v1/player_cache`, {
-    method: "POST",
-    headers: SB_HEADERS,
-    body: JSON.stringify(body),
-  });
-}
-
-// Remove one player from pool and save
-async function poolConsume(players, name) {
-  const updated = players.filter(p => p !== name);
-  await poolWrite(updated); // don't reset timer — keep original hour
-  return updated;
+  try {
+    const store = getBlob();
+    const existing = await store.get("pool", { type: "json" }).catch(() => null);
+    const updated_at = resetTimer
+      ? new Date().toISOString()
+      : (existing?.updated_at || new Date().toISOString());
+    await store.set("pool", JSON.stringify({ players, updated_at }));
+  } catch (e) { console.warn("blob write failed", e.message); }
 }
 
 // ── WIKIDATA ──────────────────────────────────────────────────────────────
 async function fetchFromWikidata() {
-  const offset = Math.floor(Math.random() * 1500); // random window into the dataset
+  const offset = Math.floor(Math.random() * 1500);
   const sparql = `
     SELECT DISTINCT ?playerLabel WHERE {
       ?player wdt:P31 wd:Q5 ;
@@ -120,14 +109,14 @@ exports.handler = async (event) => {
   try { diff = JSON.parse(event.body).diff; }
   catch { return { statusCode: 400, body: JSON.stringify({ error: "Invalid body" }) }; }
 
-  // 1. Read pool from Supabase
+  // 1. Leggi pool da Netlify Blobs
   let { players, expired } = await poolRead();
 
-  // 2. Refill if expired (1h passed) OR empty
+  // 2. Ricarica se scaduto o vuoto
   if (expired || players.length === 0) {
     try {
       players = await fetchFromWikidata();
-      await poolWrite(players, true); // reset 1h timer
+      await poolWrite(players, true);
     } catch (e) {
       return { statusCode: 500, body: JSON.stringify({ error: "Wikidata failed: " + e.message }) };
     }
@@ -142,37 +131,33 @@ exports.handler = async (event) => {
   const MAX_ATTEMPTS = 5;
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Pool esaurito mid-loop → ricomincia
     if (!players.length) {
-      // Pool esaurito mid-loop → ricomincia
       try {
         players = await fetchFromWikidata();
         await poolWrite(players, true);
       } catch {
-        return { statusCode: 500, body: JSON.stringify({ error: "Pool exhausted and Wikidata failed" }) };
+        return { statusCode: 500, body: JSON.stringify({ error: "Pool exhausted" }) };
       }
     }
 
-    // Pick a random player from the pool
+    // Prendi un giocatore casuale e rimuovilo subito
     const idx = Math.floor(Math.random() * players.length);
-    const playerName = players[idx];
-
-    // Remove from pool immediately (no repeats)
-    players = await poolConsume(players, playerName);
+    const playerName = players.splice(idx, 1)[0];
+    await poolWrite(players); // salva pool aggiornato senza resettare il timer
 
     try {
-      // Wikipedia stats
       const { title, content } = await getWikipediaCareer(playerName);
 
-      // Claude extraction
       const json = await askClaude(`Sei un esperto di calcio italiano. Analizza il contenuto Wikipedia per "${title}".
 
 LIVELLO RICHIESTO: ${diff} — ${diffGuide[diff]}
-Se il calciatore NON corrisponde a questo livello → {"error":"wrong_difficulty"}
+Se NON corrisponde al livello → {"error":"wrong_difficulty"}
 Se non è un calciatore professionista → {"error":"not_footballer"}
 Se ha meno di 20 presenze totali in Serie A → {"error":"too_few_apps"}
 
 REGOLE:
-- Ogni trasferimento/prestito = riga SEPARATA
+- Ogni trasferimento/prestito = riga SEPARATA (mai raggruppare)
 - Solo dati presenti nel testo Wikipedia
 - Solo carriera da giocatore (non allenatore)
 - Presenze e gol: numeri interi (0 se non disponibile)
@@ -194,7 +179,6 @@ ${content}`);
       };
 
     } catch (e) {
-      // Player invalid → already removed from pool, try next
       if (attempt === MAX_ATTEMPTS - 1) {
         return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
       }
