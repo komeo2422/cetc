@@ -128,16 +128,34 @@ async function getWikipediaCareer(playerName) {
   if (!results.length) throw new Error("Wikipedia not found: " + playerName);
 
   const pageRes = await fetch(
-    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(results[0].title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`,
+    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(results[0].title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*&rvsection=0`,
     { headers: WP_HEADERS }
   );
   const pages = (await pageRes.json()).query?.pages || {};
   const content = Object.values(pages)[0]?.revisions?.[0]?.slots?.main?.["*"] || "";
   if (!content) throw new Error("Empty Wikipedia page");
 
+  // Extract only the clubs/career stats section from the infobox
+  const clubsMatch = content.match(/\|\s*clubs\s*=\s*([\s\S]+?)(?=\n\s*\|\s*caps|\n\s*\|\s*goals|\n\s*\|\s*nationalteam|\n\s*\|\s*youthclubs|\}\})/i);
+  const capsMatch  = content.match(/\|\s*caps\s*=\s*([\s\S]+?)(?=\n\s*\|\s*goals|\n\s*\|\s*nationalteam|\n\s*\|\s*youthclubs|\}\})/i);
+  const goalsMatch = content.match(/\|\s*goals\s*=\s*([\s\S]+?)(?=\n\s*\|\s*nationalteam|\n\s*\|\s*youthclubs|\}\})/i);
+  const yearsMatch = content.match(/\|\s*years\s*=\s*([\s\S]+?)(?=\n\s*\|\s*clubs|\n\s*\|\s*caps|\}\})/i);
+
+  if (clubsMatch && capsMatch && goalsMatch) {
+    // Parse structured infobox data
+    const clubs = clubsMatch[1].split("{{plainlist|").join("").split("{{Plainlist|").join("")
+      .split("\n").map(l => l.replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\{\{.*?\}\}/g, "").replace(/[*'\[\]]/g, "").trim()).filter(Boolean);
+    const caps  = capsMatch[1].split("\n").map(l => l.replace(/[^0-9]/g, "").trim()).filter(Boolean);
+    const goals = goalsMatch[1].split("\n").map(l => l.replace(/[^0-9]/g, "").trim()).filter(Boolean);
+    const years = yearsMatch ? yearsMatch[1].split("\n").map(l => l.replace(/[*'\[\]]/g, "").trim()).filter(Boolean) : [];
+
+    const rows = clubs.map((club, i) => `${years[i] || "?"} | ${club} | ${caps[i] || "0"} presenze | ${goals[i] || "0"} gol`).join("\n");
+    return { title: results[0].title, content: `Carriera di ${results[0].title}:\n${rows}` };
+  }
+
+  // Fallback: use infobox or raw content
   const infobox = content.match(/\{\{Infobox football biography([\s\S]{200,6000}?)\}\}/i)?.[0];
-  const clubs   = content.match(/\|\s*clubs\s*=([\s\S]{50,2000}?)(?=\n\s*\|[a-zA-Z])/)?.[0];
-  return { title: results[0].title, content: infobox || clubs || content.substring(0, 5000) };
+  return { title: results[0].title, content: infobox || content.substring(0, 5000) };
 }
 
 // ── /api/ask ──────────────────────────────────────────────────────────────
@@ -172,7 +190,7 @@ async function handleAsk(request, env) {
       const json = await askClaude(`Sei un esperto di calcio. Analizza questo testo Wikipedia per "${title}".
 
 Se NON è un calciatore professionista rispondi SOLO: {"error":"not_footballer"}
-Se ha meno di 20 presenze TOTALI in Serie A (massima serie italiana) rispondi SOLO: {"error":"too_few_serie_a"}
+Se ha meno di 20 presenze TOTALI in Serie A (considera Serie A solo le squadre della massima divisione italiana: Milan, Inter, Juventus, Roma, Lazio, Fiorentina, Napoli, Torino, Sampdoria, Genoa, Atalanta, Bologna, Parma, Udinese, Cagliari, Palermo, Reggina, Chievo, Lecce, Brescia, Bari, Verona, Vicenza, Piacenza, Perugia, ecc.) rispondi SOLO: {"error":"too_few_serie_a"}
 
 Altrimenti rispondi SOLO con questo JSON (nient'altro):
 {"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Un fatto sulla sua carriera noto al pubblico italiano.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
