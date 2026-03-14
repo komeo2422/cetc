@@ -23,8 +23,10 @@ async function askClaude(prompt, maxTokens, apiKey) {
       messages: [{ role: "user", content: prompt }],
     }),
   });
-  const data = await res.json();
-  if (data.error) throw new Error("Anthropic: " + data.error.message);
+  const rawText = await res.text();
+console.error("Anthropic raw:", rawText.substring(0, 300));
+const data = JSON.parse(rawText);
+if (data.error) throw new Error("Anthropic: " + data.error.message);
   const text = data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
   if (!text) throw new Error("Empty response from Claude");
   return text;
