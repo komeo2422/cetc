@@ -4,6 +4,10 @@
 
 [functions]
   node_bundler = "esbuild"
+  included_files = []
+
+[functions."ask"]
+  timeout = 26
 
 [context.production.environment]
   NODE_VERSION = "18"
