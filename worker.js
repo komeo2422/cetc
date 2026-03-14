@@ -24,8 +24,10 @@ async function askClaude(prompt, maxTokens, apiKey) {
     }),
   });
   const data = await res.json();
-  if (data.error) throw new Error(data.error.message);
-  return data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+  if (data.error) throw new Error("Anthropic: " + data.error.message);
+  const text = data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+  if (!text) throw new Error("Empty response from Claude");
+  return text;
 }
 
 // ── SUPABASE ──────────────────────────────────────────────────────────────
@@ -39,14 +41,18 @@ function sbH(key) {
 }
 
 async function poolRead(sbUrl, sbKey) {
-  const res = await fetch(
-    `${sbUrl}/rest/v1/player_cache?id=eq.${CACHE_ID}&select=players,updated_at`,
-    { headers: sbH(sbKey) }
-  );
-  const rows = await res.json();
-  if (!rows.length) return { players: [], expired: true };
-  const expired = Date.now() - new Date(rows[0].updated_at).getTime() > CACHE_TTL;
-  return { players: rows[0].players || [], expired };
+  try {
+    const res = await fetch(
+      `${sbUrl}/rest/v1/player_cache?id=eq.${CACHE_ID}&select=players,updated_at`,
+      { headers: sbH(sbKey) }
+    );
+    const rows = await res.json();
+    if (!rows.length) return { players: [], expired: true };
+    const expired = Date.now() - new Date(rows[0].updated_at).getTime() > CACHE_TTL;
+    return { players: rows[0].players || [], expired };
+  } catch {
+    return { players: [], expired: true };
+  }
 }
 
 async function poolWrite(sbUrl, sbKey, players, resetTimer = false) {
@@ -90,7 +96,7 @@ async function fetchFromWikidata() {
   const players = (data.results?.bindings || [])
     .map(b => b.playerLabel?.value)
     .filter(n => n && !n.startsWith("Q") && /\s/.test(n));
-  if (players.length < 10) throw new Error("Wikidata too few results");
+  if (players.length < 5) throw new Error("Wikidata too few results: " + players.length);
   return players;
 }
 
@@ -101,6 +107,7 @@ async function getWikipediaCareer(playerName) {
   );
   const results = (await searchRes.json()).query?.search || [];
   if (!results.length) throw new Error("Wikipedia not found: " + playerName);
+
   for (const r of results) {
     const pageRes = await fetch(
       `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(r.title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`
@@ -122,6 +129,9 @@ async function handleAsk(request, env) {
   const SB_URL = env.SUPABASE_URL;
   const SB_KEY = env.SUPABASE_KEY;
 
+  if (!AN_KEY) throw new Error("ANTHROPIC_API_KEY not set");
+  if (!SB_URL) throw new Error("SUPABASE_URL not set");
+
   let { players, expired } = await poolRead(SB_URL, SB_KEY);
   if (expired || players.length === 0) {
     players = await fetchFromWikidata();
@@ -134,17 +144,20 @@ async function handleAsk(request, env) {
     Difficile:  "È poco noto: poche presenze in Serie A (ma almeno 20), giocato principalmente in Serie B/C.",
   };
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  const MAX_ATTEMPTS = 5;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (!players.length) {
       players = await fetchFromWikidata();
       await poolWrite(SB_URL, SB_KEY, players, true);
     }
+
     const idx = Math.floor(Math.random() * players.length);
     const playerName = players[idx];
     players = await poolConsume(SB_URL, SB_KEY, players, playerName);
 
     try {
       const { title, content } = await getWikipediaCareer(playerName);
+
       const json = await askClaude(`Sei un esperto di calcio italiano. Analizza il contenuto Wikipedia per "${title}".
 
 LIVELLO: ${diff} — ${diffGuide[diff]}
@@ -158,7 +171,7 @@ REGOLE:
 - Solo carriera da giocatore (non allenatore)
 - Presenze e gol: numeri interi (0 se non disponibile)
 
-JSON:
+RISPONDI SOLO con JSON valido, nient'altro:
 {"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Una frase su fatto noto al pubblico italiano.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
 
 Wikipedia:
@@ -168,9 +181,15 @@ ${content}`, 900, AN_KEY);
       const parsed = JSON.parse(clean);
       if (parsed.error) throw new Error(parsed.error);
       return new Response(JSON.stringify(parsed), { status: 200, headers: CORS });
-    } catch { continue; }
+
+    } catch (e) {
+      console.error("attempt failed:", e.message);
+      if (attempt === MAX_ATTEMPTS - 1) {
+        return new Response(JSON.stringify({ error: "Max attempts reached: " + e.message }), { status: 500, headers: CORS });
+      }
+      continue;
+    }
   }
-  return new Response(JSON.stringify({ error: "Max attempts reached" }), { status: 500, headers: CORS });
 }
 
 // ── /api/scores ───────────────────────────────────────────────────────────
@@ -184,43 +203,51 @@ async function handleScoresGet(env) {
 
 async function handleScoresPost(request, env) {
   const { username, pts } = await request.json();
-  const SB_URL = env.SUPABASE_URL;
-  const SB_KEY = env.SUPABASE_KEY;
   const r = await fetch(
-    `${SB_URL}/rest/v1/leaderboard?username=eq.${encodeURIComponent(username)}`,
-    { headers: sbH(SB_KEY) }
+    `${env.SUPABASE_URL}/rest/v1/leaderboard?username=eq.${encodeURIComponent(username)}`,
+    { headers: sbH(env.SUPABASE_KEY) }
   );
   const rows = await r.json();
   const ex = rows[0];
   const ns = (ex?.total_score || 0) + pts;
   const nq = (ex?.total_q || 0) + 1;
   const avg = Math.round(ns / nq * 100) / 100;
-  await fetch(`${SB_URL}/rest/v1/leaderboard`, {
+  await fetch(`${env.SUPABASE_URL}/rest/v1/leaderboard`, {
     method: "POST",
-    headers: sbH(SB_KEY),
+    headers: sbH(env.SUPABASE_KEY),
     body: JSON.stringify({ username, total_score: ns, total_q: nq, avg_score: avg, updated_at: new Date().toISOString() }),
   });
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: CORS });
 }
 
-// ── MAIN ROUTER ───────────────────────────────────────────────────────────
+// ── ROUTER ────────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const path = url.pathname;
+    const url    = new URL(request.url);
+    const path   = url.pathname;
     const method = request.method;
 
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
+    // Debug endpoint
+    if (path === "/api/test") {
+      return new Response(JSON.stringify({
+        ak: !!env.ANTHROPIC_API_KEY,
+        su: !!env.SUPABASE_URL,
+        sk: !!env.SUPABASE_KEY,
+        assets: !!env.ASSETS,
+      }), { status: 200, headers: CORS });
+    }
+
     try {
-      if (path === "/api/ask" && method === "POST")    return await handleAsk(request, env);
+      if (path === "/api/ask"    && method === "POST") return await handleAsk(request, env);
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
       if (path === "/api/scores" && method === "POST") return await handleScoresPost(request, env);
     } catch (e) {
       return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
     }
 
-    // Serve static assets
-    return env.ASSETS.fetch(request);
+    if (env.ASSETS) return env.ASSETS.fetch(request);
+    return new Response("Not found", { status: 404 });
   },
 };
