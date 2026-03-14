@@ -115,14 +115,21 @@ async function fetchFromWikidata() {
 
 // ── WIKIPEDIA ─────────────────────────────────────────────────────────────
 async function getWikipediaCareer(playerName) {
+  const WP_HEADERS = {
+    "User-Agent": "CetcFootballTrivia/1.0 (https://cetc.komeobuschito.workers.dev; matteo.buschittari@gmail.com) Cloudflare-Worker",
+    "Accept": "application/json",
+  };
+
   const searchRes = await fetch(
-    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(playerName + " footballer")}&format=json&origin=*&srlimit=1`
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(playerName + " footballer")}&format=json&origin=*&srlimit=1`,
+    { headers: WP_HEADERS }
   );
   const results = (await searchRes.json()).query?.search || [];
   if (!results.length) throw new Error("Wikipedia not found: " + playerName);
 
   const pageRes = await fetch(
-    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(results[0].title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`
+    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(results[0].title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`,
+    { headers: WP_HEADERS }
   );
   const pages = (await pageRes.json()).query?.pages || {};
   const content = Object.values(pages)[0]?.revisions?.[0]?.slots?.main?.["*"] || "";
@@ -234,23 +241,7 @@ export default {
         assets: !!env.ASSETS,
       }), { status: 200, headers: CORS });
     }
-if (path === "/api/testanthropic") {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 10,
-      messages: [{ role: "user", content: "Hi" }],
-    }),
-  });
-  const text = await res.text();
-  return new Response(text, { status: 200, headers: CORS });
-}
+
     try {
       if (path === "/api/ask"    && method === "POST") return await handleAsk(request, env);
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
