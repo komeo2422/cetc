@@ -172,6 +172,7 @@ async function handleAsk(request, env) {
       const json = await askClaude(`Sei un esperto di calcio. Analizza questo testo Wikipedia per "${title}".
 
 Se NON è un calciatore professionista rispondi SOLO: {"error":"not_footballer"}
+Se ha meno di 20 presenze TOTALI in Serie A (massima serie italiana) rispondi SOLO: {"error":"too_few_serie_a"}
 
 Altrimenti rispondi SOLO con questo JSON (nient'altro):
 {"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Un fatto sulla sua carriera noto al pubblico italiano.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
@@ -184,9 +185,6 @@ ${content}`, 900, AN_KEY);
       const clean = json.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
       if (parsed.error) throw new Error(parsed.error);
-      if (!parsed.carriera || parsed.carriera.length === 0) throw new Error("empty career");
-      const totalApps = parsed.carriera.reduce((s, r) => s + (r.presenze || 0), 0);
-      if (totalApps === 0) throw new Error("all zero appearances");
       return new Response(JSON.stringify(parsed), { status: 200, headers: CORS });
 
     } catch (e) {
