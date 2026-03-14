@@ -24,9 +24,10 @@ async function askClaude(prompt, maxTokens, apiKey) {
     }),
   });
   const rawText = await res.text();
-console.error("Anthropic raw:", rawText.substring(0, 300));
-const data = JSON.parse(rawText);
-if (data.error) throw new Error("Anthropic: " + data.error.message);
+  let data;
+  try { data = JSON.parse(rawText); }
+  catch (e) { throw new Error("Anthropic non-JSON: " + rawText.substring(0, 150)); }
+  if (data.error) throw new Error("Anthropic: " + data.error.message);
   const text = data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
   if (!text) throw new Error("Empty response from Claude");
   return text;
@@ -52,9 +53,7 @@ async function poolRead(sbUrl, sbKey) {
     if (!rows.length) return { players: [], expired: true };
     const expired = Date.now() - new Date(rows[0].updated_at).getTime() > CACHE_TTL;
     return { players: rows[0].players || [], expired };
-  } catch {
-    return { players: [], expired: true };
-  }
+  } catch { return { players: [], expired: true }; }
 }
 
 async function poolWrite(sbUrl, sbKey, players, resetTimer = false) {
@@ -89,15 +88,27 @@ async function fetchFromWikidata() {
     LIMIT ${POOL_SIZE}
     OFFSET ${offset}
   `;
+
   const res = await fetch(
     `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparql)}&format=json`,
-    { headers: { "User-Agent": "CetcTrivia/1.0" } }
+    {
+      headers: {
+        "User-Agent": "CetcFootballTrivia/1.0 (https://cetc.komeobuschito.workers.dev; matteo.buschittari@gmail.com) Cloudflare-Worker",
+        "Accept": "application/sparql-results+json",
+      }
+    }
   );
-  if (!res.ok) throw new Error("Wikidata HTTP " + res.status);
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Wikidata HTTP ${res.status}: ${txt.substring(0, 100)}`);
+  }
+
   const data = await res.json();
   const players = (data.results?.bindings || [])
     .map(b => b.playerLabel?.value)
     .filter(n => n && !n.startsWith("Q") && /\s/.test(n));
+
   if (players.length < 5) throw new Error("Wikidata too few results: " + players.length);
   return players;
 }
@@ -105,23 +116,21 @@ async function fetchFromWikidata() {
 // ── WIKIPEDIA ─────────────────────────────────────────────────────────────
 async function getWikipediaCareer(playerName) {
   const searchRes = await fetch(
-    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(playerName + " footballer")}&format=json&origin=*&srlimit=2`
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(playerName + " footballer")}&format=json&origin=*&srlimit=1`
   );
   const results = (await searchRes.json()).query?.search || [];
   if (!results.length) throw new Error("Wikipedia not found: " + playerName);
 
-  for (const r of results) {
-    const pageRes = await fetch(
-      `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(r.title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`
-    );
-    const pages = (await pageRes.json()).query?.pages || {};
-    const content = Object.values(pages)[0]?.revisions?.[0]?.slots?.main?.["*"] || "";
-    if (!content.match(/football|calciat|soccer/i)) continue;
-    const infobox = content.match(/\{\{Infobox football biography([\s\S]{200,6000}?)\}\}/i)?.[0];
-    const clubs   = content.match(/\|\s*clubs\s*=([\s\S]{50,2000}?)(?=\n\s*\|[a-zA-Z])/)?.[0];
-    return { title: r.title, content: infobox || clubs || content.substring(0, 5000) };
-  }
-  throw new Error("No valid football page for: " + playerName);
+  const pageRes = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(results[0].title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`
+  );
+  const pages = (await pageRes.json()).query?.pages || {};
+  const content = Object.values(pages)[0]?.revisions?.[0]?.slots?.main?.["*"] || "";
+  if (!content) throw new Error("Empty Wikipedia page");
+
+  const infobox = content.match(/\{\{Infobox football biography([\s\S]{200,6000}?)\}\}/i)?.[0];
+  const clubs   = content.match(/\|\s*clubs\s*=([\s\S]{50,2000}?)(?=\n\s*\|[a-zA-Z])/)?.[0];
+  return { title: results[0].title, content: infobox || clubs || content.substring(0, 5000) };
 }
 
 // ── /api/ask ──────────────────────────────────────────────────────────────
@@ -131,20 +140,13 @@ async function handleAsk(request, env) {
   const SB_URL = env.SUPABASE_URL;
   const SB_KEY = env.SUPABASE_KEY;
 
-  if (!AN_KEY) throw new Error("ANTHROPIC_API_KEY not set");
-  if (!SB_URL) throw new Error("SUPABASE_URL not set");
+  if (!AN_KEY) return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY not set" }), { status: 500, headers: CORS });
 
   let { players, expired } = await poolRead(SB_URL, SB_KEY);
   if (expired || players.length === 0) {
     players = await fetchFromWikidata();
     await poolWrite(SB_URL, SB_KEY, players, true);
   }
-
-  const diffGuide = {
-    Facile:     "È famoso a livello internazionale: campione del mondo, Pallone d'Oro, icona assoluta della Serie A.",
-    Intermedio: "È conosciuto dagli appassionati italiani: almeno 2-3 stagioni in Serie A ma non superstar mondiale.",
-    Difficile:  "È poco noto: poche presenze in Serie A (ma almeno 20), giocato principalmente in Serie B/C.",
-  };
 
   const MAX_ATTEMPTS = 5;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -160,17 +162,14 @@ async function handleAsk(request, env) {
     try {
       const { title, content } = await getWikipediaCareer(playerName);
 
-      const json = await askClaude(`Sei un esperto di calcio. Analizza questo contenuto Wikipedia per "${title}".
+      const json = await askClaude(`Sei un esperto di calcio. Analizza questo testo Wikipedia per "${title}".
 
-Se la pagina NON riguarda un calciatore professionista rispondi SOLO: {"error":"not_footballer"}
+Se NON è un calciatore professionista rispondi SOLO: {"error":"not_footballer"}
 
-Altrimenti estrai i dati e rispondi SOLO con JSON valido:
-{"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Una frase su di lui nota in Italia. Se non è noto in Italia scrivi un fatto generico sulla sua carriera.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
+Altrimenti rispondi SOLO con questo JSON (nient'altro):
+{"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Un fatto sulla sua carriera noto al pubblico italiano.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
 
-REGOLE:
-- Ogni squadra/prestito = riga separata
-- Presenze e gol: numeri interi (0 se non disponibile)
-- Includi tutta la carriera da giocatore
+Regole: ogni squadra/prestito = riga separata. Presenze e gol: numeri interi (0 se non disponibile).
 
 Wikipedia:
 ${content}`, 900, AN_KEY);
@@ -183,7 +182,7 @@ ${content}`, 900, AN_KEY);
     } catch (e) {
       console.error("attempt failed:", e.message);
       if (attempt === MAX_ATTEMPTS - 1) {
-        return new Response(JSON.stringify({ error: "Max attempts reached: " + e.message }), { status: 500, headers: CORS });
+        return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
       }
       continue;
     }
@@ -227,7 +226,6 @@ export default {
 
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
 
-    // Debug endpoint
     if (path === "/api/test") {
       return new Response(JSON.stringify({
         ak: !!env.ANTHROPIC_API_KEY,
@@ -249,5 +247,3 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 };
-
-
