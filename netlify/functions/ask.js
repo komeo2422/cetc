@@ -1,7 +1,16 @@
 const SB_URL = process.env.SUPABASE_URL;
 const SB_KEY = process.env.SUPABASE_KEY;
 const AN_KEY = process.env.ANTHROPIC_API_KEY;
-const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 ore
+const CACHE_TTL = 60 * 60 * 1000; // 1 ora
+const POOL_SIZE = 50;
+const CACHE_ID  = "pool_v1";
+
+const SB_HEADERS = {
+  apikey: SB_KEY,
+  Authorization: `Bearer ${SB_KEY}`,
+  "Content-Type": "application/json",
+  Prefer: "resolution=merge-duplicates",
+};
 
 // ── CLAUDE ────────────────────────────────────────────────────────────────
 async function askClaude(prompt, maxTokens = 900) {
@@ -23,39 +32,38 @@ async function askClaude(prompt, maxTokens = 900) {
   return data.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
 }
 
-// ── SUPABASE CACHE ────────────────────────────────────────────────────────
-async function cacheGet(key) {
-  try {
-    const res = await fetch(
-      `${SB_URL}/rest/v1/player_cache?id=eq.${encodeURIComponent(key)}&select=players,updated_at`,
-      { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } }
-    );
-    const rows = await res.json();
-    if (!rows.length) return null;
-    if (Date.now() - new Date(rows[0].updated_at).getTime() > CACHE_TTL) return null;
-    return rows[0].players; // array of strings
-  } catch { return null; }
+// ── SUPABASE POOL ─────────────────────────────────────────────────────────
+async function poolRead() {
+  const res = await fetch(
+    `${SB_URL}/rest/v1/player_cache?id=eq.${CACHE_ID}&select=players,updated_at`,
+    { headers: SB_HEADERS }
+  );
+  const rows = await res.json();
+  if (!rows.length) return { players: [], expired: true };
+  const expired = Date.now() - new Date(rows[0].updated_at).getTime() > CACHE_TTL;
+  return { players: rows[0].players || [], expired };
 }
 
-async function cacheSet(key, players) {
-  try {
-    await fetch(`${SB_URL}/rest/v1/player_cache`, {
-      method: "POST",
-      headers: {
-        apikey: SB_KEY,
-        Authorization: `Bearer ${SB_KEY}`,
-        "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates",
-      },
-      body: JSON.stringify({ id: key, players, updated_at: new Date().toISOString() }),
-    });
-  } catch (e) { console.warn("cache write failed", e.message); }
+async function poolWrite(players, resetTimer = false) {
+  const body = { id: CACHE_ID, players };
+  if (resetTimer) body.updated_at = new Date().toISOString();
+  await fetch(`${SB_URL}/rest/v1/player_cache`, {
+    method: "POST",
+    headers: SB_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+// Remove one player from pool and save
+async function poolConsume(players, name) {
+  const updated = players.filter(p => p !== name);
+  await poolWrite(updated); // don't reset timer — keep original hour
+  return updated;
 }
 
 // ── WIKIDATA ──────────────────────────────────────────────────────────────
-// Single pool: all footballers who played in Serie A (wdt:P118 = Q15804)
-// born 1960-1998 so they cover the 1990-today window
 async function fetchFromWikidata() {
+  const offset = Math.floor(Math.random() * 1500); // random window into the dataset
   const sparql = `
     SELECT DISTINCT ?playerLabel WHERE {
       ?player wdt:P31 wd:Q5 ;
@@ -66,18 +74,19 @@ async function fetchFromWikidata() {
       FILTER(YEAR(?birth) >= 1960 && YEAR(?birth) <= 1998)
       SERVICE wikibase:label { bd:serviceParam wikibase:language "en" }
     }
-    LIMIT 2000
+    LIMIT ${POOL_SIZE}
+    OFFSET ${offset}
   `;
   const url = `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparql)}&format=json`;
   const res = await fetch(url, {
-    headers: { "User-Agent": "CetcTrivia/1.0 (football quiz; contact via netlify)" },
+    headers: { "User-Agent": "CetcTrivia/1.0 (football quiz)" },
   });
   if (!res.ok) throw new Error("Wikidata HTTP " + res.status);
   const data = await res.json();
   const players = (data.results?.bindings || [])
     .map(b => b.playerLabel?.value)
-    .filter(n => n && !n.startsWith("Q") && /\s/.test(n)); // nome cognome, no QID
-  if (players.length < 50) throw new Error("Wikidata returned too few results");
+    .filter(n => n && !n.startsWith("Q") && /\s/.test(n));
+  if (players.length < 10) throw new Error("Wikidata returned too few results");
   return players;
 }
 
@@ -96,8 +105,6 @@ async function getWikipediaCareer(playerName) {
     const pages = (await pageRes.json()).query?.pages || {};
     const content = Object.values(pages)[0]?.revisions?.[0]?.slots?.main?.["*"] || "";
     if (!content.match(/football|calciat|soccer/i)) continue;
-
-    // Extract the most relevant section
     const infobox = content.match(/\{\{Infobox football biography([\s\S]{200,6000}?)\}\}/i)?.[0];
     const clubs   = content.match(/\|\s*clubs\s*=([\s\S]{50,2000}?)(?=\n\s*\|[a-zA-Z])/)?.[0];
     return { title: r.title, content: infobox || clubs || content.substring(0, 5000) };
@@ -113,55 +120,64 @@ exports.handler = async (event) => {
   try { diff = JSON.parse(event.body).diff; }
   catch { return { statusCode: 400, body: JSON.stringify({ error: "Invalid body" }) }; }
 
-  // 1. Get player pool (cache → Wikidata)
-  let pool = await cacheGet("pool_all");
-  if (!pool) {
+  // 1. Read pool from Supabase
+  let { players, expired } = await poolRead();
+
+  // 2. Refill if expired (1h passed) OR empty
+  if (expired || players.length === 0) {
     try {
-      pool = await fetchFromWikidata();
-      await cacheSet("pool_all", pool);
+      players = await fetchFromWikidata();
+      await poolWrite(players, true); // reset 1h timer
     } catch (e) {
       return { statusCode: 500, body: JSON.stringify({ error: "Wikidata failed: " + e.message }) };
     }
   }
 
+  const diffGuide = {
+    Facile:     "È famoso a livello internazionale: campione del mondo, Pallone d'Oro, o icona assoluta della Serie A.",
+    Intermedio: "È conosciuto dagli appassionati italiani: almeno 2-3 stagioni regolari in Serie A ma non superstar mondiale.",
+    Difficile:  "È poco noto: poche presenze in Serie A (ma almeno 20), giocato principalmente in Serie B/C o straniero di passaggio.",
+  };
+
   const MAX_ATTEMPTS = 5;
-  const tried = new Set();
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    try {
-      // 2. Pick random player not yet tried this request
-      let playerName;
-      for (let i = 0; i < 20; i++) {
-        const candidate = pool[Math.floor(Math.random() * pool.length)];
-        if (!tried.has(candidate)) { playerName = candidate; break; }
+    if (!players.length) {
+      // Pool esaurito mid-loop → ricomincia
+      try {
+        players = await fetchFromWikidata();
+        await poolWrite(players, true);
+      } catch {
+        return { statusCode: 500, body: JSON.stringify({ error: "Pool exhausted and Wikidata failed" }) };
       }
-      if (!playerName) throw new Error("Pool exhausted");
-      tried.add(playerName);
+    }
 
-      // 3. Wikipedia career stats
+    // Pick a random player from the pool
+    const idx = Math.floor(Math.random() * players.length);
+    const playerName = players[idx];
+
+    // Remove from pool immediately (no repeats)
+    players = await poolConsume(players, playerName);
+
+    try {
+      // Wikipedia stats
       const { title, content } = await getWikipediaCareer(playerName);
 
-      // 4. Claude: extract + validate difficulty
-      const diffGuide = {
-        Facile:     "È famoso a livello internazionale: campione del mondo, Pallone d'Oro, o icona assoluta della Serie A. Qualsiasi tifoso italiano lo conosce.",
-        Intermedio: "È conosciuto dagli appassionati di calcio italiani: ha giocato almeno 2-3 stagioni regolari in Serie A ma non è una superstar mondiale.",
-        Difficile:  "È poco noto: ha fatto poche presenze in Serie A (ma almeno 20 in totale), ha giocato principalmente in Serie B/C o è uno straniero di cui i tifosi ricordano poco.",
-      };
-
+      // Claude extraction
       const json = await askClaude(`Sei un esperto di calcio italiano. Analizza il contenuto Wikipedia per "${title}".
 
 LIVELLO RICHIESTO: ${diff} — ${diffGuide[diff]}
-Se il calciatore NON corrisponde a questo livello, rispondi SOLO con: {"error":"wrong_difficulty"}
-Se non è un calciatore professionista, rispondi SOLO con: {"error":"not_footballer"}
-Se ha meno di 20 presenze totali in Serie A, rispondi SOLO con: {"error":"too_few_apps"}
+Se il calciatore NON corrisponde a questo livello → {"error":"wrong_difficulty"}
+Se non è un calciatore professionista → {"error":"not_footballer"}
+Se ha meno di 20 presenze totali in Serie A → {"error":"too_few_apps"}
 
-REGOLE per l'estrazione:
-- Ogni trasferimento e prestito = riga SEPARATA (non raggruppare mai)
-- Usa solo dati presenti nel testo Wikipedia
-- Includi solo carriera da giocatore (non da allenatore)
+REGOLE:
+- Ogni trasferimento/prestito = riga SEPARATA
+- Solo dati presenti nel testo Wikipedia
+- Solo carriera da giocatore (non allenatore)
 - Presenze e gol: numeri interi (0 se non disponibile)
 
-RISPONDI SOLO con JSON valido:
+RISPONDI SOLO con JSON:
 {"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Una frase su fatto noto al pubblico italiano.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
 
 Contenuto Wikipedia:
@@ -178,6 +194,7 @@ ${content}`);
       };
 
     } catch (e) {
+      // Player invalid → already removed from pool, try next
       if (attempt === MAX_ATTEMPTS - 1) {
         return { statusCode: 500, body: JSON.stringify({ error: e.message }) };
       }
