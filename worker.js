@@ -158,21 +158,17 @@ async function handleAsk(request, env) {
     try {
       const { title, content } = await getWikipediaCareer(playerName);
 
-      const json = await askClaude(`Sei un esperto di calcio italiano. Analizza il contenuto Wikipedia per "${title}".
+      const json = await askClaude(`Sei un esperto di calcio. Analizza questo contenuto Wikipedia per "${title}".
 
-LIVELLO: ${diff} — ${diffGuide[diff]}
-Se NON corrisponde al livello → {"error":"wrong_difficulty"}
-Se non è un calciatore → {"error":"not_footballer"}
-Se ha meno di 20 presenze in Serie A → {"error":"too_few_apps"}
+Se la pagina NON riguarda un calciatore professionista rispondi SOLO: {"error":"not_footballer"}
+
+Altrimenti estrai i dati e rispondi SOLO con JSON valido:
+{"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Una frase su di lui nota in Italia. Se non è noto in Italia scrivi un fatto generico sulla sua carriera.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
 
 REGOLE:
-- Ogni trasferimento/prestito = riga SEPARATA
-- Solo dati dal testo Wikipedia
-- Solo carriera da giocatore (non allenatore)
+- Ogni squadra/prestito = riga separata
 - Presenze e gol: numeri interi (0 se non disponibile)
-
-RISPONDI SOLO con JSON valido, nient'altro:
-{"nome":"...","nomi_alternativi":["Cognome"],"ruolo":"ruolo in italiano","nazionalita":"nazionalità in italiano","episodio":"Una frase su fatto noto al pubblico italiano.","carriera":[{"anni":"XXXX-XXXX","squadra":"...","presenze":0,"gol":0}]}
+- Includi tutta la carriera da giocatore
 
 Wikipedia:
 ${content}`, 900, AN_KEY);
