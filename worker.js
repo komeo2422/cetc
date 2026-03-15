@@ -81,9 +81,12 @@ async function poolConsume(sbUrl, sbKey, players, name) {
 
 async function buildPool(env) {
   const db = await getPlayerDB(env);
-  // Only include players with career data
-  const valid = db.filter(p => p.nome && p.nome.includes(" ") && p.carriera && p.carriera.length > 0);
-  // Shuffle
+  const valid = db.filter(p => {
+    if (!p.nome || !p.nome.includes(" ") || !p.carriera || p.carriera.length === 0) return false;
+    // Must have started career in 1990 or later
+    const earliest = Math.min(...p.carriera.map(c => parseInt(c.anni?.split("-")[0]) || 9999));
+    return earliest >= 1990;
+  });
   for (let i = valid.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [valid[i], valid[j]] = [valid[j], valid[i]];
@@ -130,6 +133,10 @@ async function handleAsk(request, env) {
       const p = dbMap[playerName];
       if (!p) throw new Error("Player not found in DB: " + playerName);
       if (!p.carriera || p.carriera.length === 0) throw new Error("No career data");
+
+      // Must have started career 1990+
+      const earliest = Math.min(...p.carriera.map(c => parseInt(c.anni?.split("-")[0]) || 9999));
+      if (earliest < 1990) throw new Error("career_too_old");
 
       // Count Serie A apps
       const SERIE_A_CLUBS = ["Milan","Inter","Juventus","Roma","Lazio","Fiorentina","Napoli",
