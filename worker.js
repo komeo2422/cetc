@@ -159,6 +159,15 @@ async function handleAsk(request, env) {
       const parts = p.nome.trim().split(" ");
       const cognome = parts[parts.length - 1];
 
+      // Filter out national team entries
+      p.carriera = p.carriera.filter(c => {
+      const s = (c.squadra || "").toLowerCase();
+      return !s.includes("national") && !s.includes("nazionale") && 
+         !s.includes("under") && !s.includes("unter") && 
+         !s.includes("olimp") && !s.includes("youth");
+      });
+if (p.carriera.length === 0) throw new Error("no club career");
+      
       const result = {
         nome: p.nome,
         nomi_alternativi: [cognome],
