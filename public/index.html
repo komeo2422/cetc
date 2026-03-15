@@ -4,14 +4,12 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover"/>
 <meta name="theme-color" content="#111111"/>
-
-<!-- PWA / iOS -->
+<meta name="mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="Calciatore"/>
 <link rel="apple-touch-icon" href="/icon-192.png"/>
 <link rel="manifest" href="/manifest.json"/>
-
 <title>Chi è questo calciatore?</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -28,7 +26,6 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th{padding:8px 10px;color:#bbb;font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;background:#f7f7f7;text-align:left}
 th.r,td.r{text-align:center}
 td{padding:8px 10px;border-top:1px solid #f0f0f0}
-.pill{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;padding:3px 9px;border-radius:5px;font-weight:700}
 @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
 .shake{animation:shake .4s}
 .hint{display:flex;gap:10px;padding:9px 12px;background:#f8f8f8;border:1px solid #ebebeb;border-radius:8px;font-size:13px;margin-bottom:6px}
@@ -44,57 +41,51 @@ td{padding:8px 10px;border-top:1px solid #f0f0f0}
 <div id="app"></div>
 <script>
 const LS = localStorage;
-const TIERS = [
+const TIERS=[
   {name:'Giuseppe Pastore',min:2.5,emoji:'🏆',desc:'Memoria enciclopedica. Sei un fenomeno assoluto.'},
   {name:'Esperto',min:1.75,emoji:'⚽',desc:'Conosci il calcio come pochi. Chapeau.'},
   {name:'Professionista',min:1.0,emoji:'🎽',desc:'Buona conoscenza del mondo del pallone.'},
   {name:'Dilettante',min:0,emoji:'📺',desc:'Guardi il calcio solo quando gioca la Nazionale?'},
 ];
-const DIFFS  = ['Facile','Intermedio','Difficile'];
-const HLBLS  = ['Ruolo','Nazionalità','Episodio'];
-const DC     = {Facile:{bg:'#e8f5e9',c:'#2e7d32'},Intermedio:{bg:'#fff8e1',c:'#e65100'},Difficile:{bg:'#fce4ec',c:'#b71c1c'}};
+const HLBLS=['Ruolo','Nazionalità','Episodio'];
 
-// ── STATE ──────────────────────────────────────────────────────────────
-const savedUser = LS.getItem('cetc_user') || '';
-const S = {
-  screen: savedUser ? 'home' : 'setname',
-  username: savedUser,
-  player: null, nextPlayer: null, diff: '',
-  hints:[false,false,false], attempts:0, hintsUsed:0, answer:'', result:null,
-  score:0, q:0, err:null,
-  showLbInGame: false, lbData: null
-};
-
-// ── HELPERS ────────────────────────────────────────────────────────────
 function nrm(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').trim()}
-function rndD(){return DIFFS[Math.floor(Math.random()*3)]}
 function tier(avg){return TIERS.find(t=>avg>=t.min)||TIERS[3]}
 
-// ── API ────────────────────────────────────────────────────────────────
-async function fetchPlayer(diff){
-  const r = await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({diff})});
+const savedUser = LS.getItem('cetc_user')||'';
+const S = {
+  screen: savedUser?'home':'setname',
+  username: savedUser,
+  player:null, nextPlayer:null,
+  hints:[false,false,false], attempts:0, hintsUsed:0,
+  answer:'', result:null,
+  score:0, q:0, err:null,
+  showLbInGame:false, lbData:null
+};
+
+// ── API ────────────────────────────────────────────────────────────────────
+async function fetchPlayer(){
+  const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({diff:'any'})});
   if(!r.ok) throw new Error('API error');
   return r.json();
 }
 function prefetch(){
-  const d=rndD();
-  fetchPlayer(d).then(p=>{S.nextPlayer={player:p,diff:d}}).catch(()=>{});
+  fetchPlayer().then(p=>{S.nextPlayer=p}).catch(()=>{});
 }
 async function loadQ(){
   S.hints=[false,false,false];S.attempts=0;S.hintsUsed=0;S.answer='';S.result=null;S.err=null;S.showLbInGame=false;
   if(S.nextPlayer){
-    S.player=S.nextPlayer.player;S.diff=S.nextPlayer.diff;S.nextPlayer=null;
+    S.player=S.nextPlayer;S.nextPlayer=null;
     S.screen='playing';render();prefetch();
   } else {
     S.screen='loading';render();
-    const d=rndD();S.diff=d;
-    try{S.player=await fetchPlayer(d);S.screen='playing';prefetch();}
+    try{S.player=await fetchPlayer();S.screen='playing';prefetch();}
     catch{S.err='Errore caricamento. Riprova.';S.screen='home';}
     render();
   }
 }
 
-// ── LEADERBOARD ────────────────────────────────────────────────────────
+// ── LEADERBOARD ────────────────────────────────────────────────────────────
 async function lbLoad(){
   try{const r=await fetch('/api/scores');return r.ok?r.json():[];}catch{return[];}
 }
@@ -103,7 +94,7 @@ async function lbSave(pts){
   catch(e){console.warn('lb',e);}
 }
 
-// ── GAME ───────────────────────────────────────────────────────────────
+// ── GAME ───────────────────────────────────────────────────────────────────
 function checkAns(){
   const ans=S.answer.trim();if(!ans||!S.player||S.result)return;
   const n=nrm(ans);
@@ -126,16 +117,16 @@ function checkAns(){
   render();
 }
 function useHint(){
-  if(S.result) return;
-  const nextHint=S.hints.findIndex(h=>!h);
-  if(nextHint===-1) return; // all hints already shown
-  S.hints[nextHint]=true;
+  if(S.result)return;
+  const next=S.hints.findIndex(h=>!h);
+  if(next===-1)return;
+  S.hints[next]=true;
   S.hintsUsed=Math.min(3,S.hintsUsed+1);
   render();
 }
 function surrender(){if(S.result)return;S.result={correct:false,pts:0};S.q++;lbSave(0);render();}
 
-// ── SCREENS ────────────────────────────────────────────────────────────
+// ── SCREENS ────────────────────────────────────────────────────────────────
 function scSetname(){return`
   <div style="display:flex;flex-direction:column;justify-content:center;min-height:90dvh;padding:20px 0">
     <div style="text-align:center;margin-bottom:36px">
@@ -161,7 +152,8 @@ function scHome(){return`
     <span class="lbl">Come si gioca</span>
     <p style="font-size:13px;color:#555;line-height:1.7">
       Ogni risposta sbagliata sblocca un indizio e scala i punti.<br>
-      <b>1° tentativo</b> = 3pt · <b>2°</b> = 2pt · <b>3°</b> = 1pt · Nessuna = 0pt
+      <b>1° tentativo</b> = 3pt · <b>2°</b> = 2pt · <b>3°</b> = 1pt · Nessuna = 0pt<br>
+      Puoi anche chiedere un indizio manualmente con 💡
     </p>
   </div>
   ${S.err?`<p style="color:#c62828;font-size:13px;margin-bottom:12px;text-align:center">${S.err}</p>`:''}
@@ -182,9 +174,9 @@ function scLoading(){return`
 function scPlaying(){
   const p=S.player;
   const tot=p.carriera.reduce((a,r)=>({p:a.p+(+r.presenze||0),g:a.g+(+r.gol||0)}),{p:0,g:0});
-  const dc=DC[S.diff]||DC.Intermedio;
   const over=!!S.result;
-  const al=3-S.attempts;
+  const al=3-S.hintsUsed;
+  const allHints=S.hints.every(Boolean);
 
   const rows=p.carriera.map(r=>`<tr>
     <td style="color:#999;white-space:nowrap">${r.anni}</td>
@@ -197,6 +189,22 @@ function scPlaying(){
     <span class="hint-lbl">${HLBLS[i]}</span>
     <span style="color:#333;line-height:1.5">${[p.ruolo,p.nazionalita,p.episodio][i]}</span>
   </div>`:'').join('');
+
+  const lbInGame=S.showLbInGame?`
+    <div style="margin-top:14px;border:1px solid #ebebeb;border-radius:10px;overflow:hidden">
+      <div style="background:#f7f7f7;padding:10px 14px;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#aaa;font-weight:700">Classifica Globale</div>
+      ${!S.lbData||S.lbData.length===0
+        ?`<p style="text-align:center;color:#bbb;padding:16px;font-size:13px">Nessun punteggio ancora</p>`
+        :S.lbData.slice(0,10).map((e,i)=>{
+          const me=nrm(e.username)===nrm(S.username);
+          return`<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid #f0f0f0;background:${me?'#111':'#fff'}">
+            <span style="font-size:14px;min-width:22px;text-align:center">${i===0?'🥇':i===1?'🥈':i===2?'🥉':`<span style="color:#ccc;font-size:12px;font-weight:700">${i+1}</span>`}</span>
+            <span style="flex:1;font-size:13px;font-weight:${me?700:500};color:${me?'#fff':'#111'}">${e.username}</span>
+            <span style="font-size:14px;font-weight:800;color:${me?'#fff':'#111'}">${(+e.avg_score).toFixed(2)}</span>
+            <span style="font-size:10px;color:${me?'#888':'#bbb'};text-transform:uppercase">pt/dom</span>
+          </div>`;
+        }).join('')}
+    </div>`:'';
 
   const bot=over?`
     <div class="rbox ${S.result.correct?'rok':'rko'}">
@@ -212,7 +220,13 @@ function scPlaying(){
         style="flex:1;padding:14px;border:1.5px solid #e0e0e0;border-radius:10px;font-size:16px;outline:none;color:#111"/>
       <button id="btn-check" style="padding:14px 18px;background:#111;color:#fff;border:none;border-radius:10px;font-size:20px;cursor:pointer">→</button>
     </div>
-    <div style="display:flex;gap:8px"><button class="btn-ghost" id="btn-sur">Mi arrendo</button></div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button class="btn-ghost" id="btn-sur">Mi arrendo</button>
+      ${!allHints?`<button class="btn-ghost" id="btn-hint" style="color:#555;border-color:#bbb">💡 Indizio${al>0?' (-1pt)':''}</button>`:''}
+    </div>
+    <button id="btn-lb-game" style="width:100%;padding:10px 0;background:#fff;border:1.5px solid #e8e8e8;border-radius:10px;font-size:13px;color:#555;cursor:pointer">
+      ${S.showLbInGame?'✕ Chiudi classifica':'🏆 Classifica globale'}
+    </button>
   `;
 
   return`
@@ -223,9 +237,8 @@ function scPlaying(){
         <span style="font-size:18px;font-weight:800">${S.score}pt</span>
       </div>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <span class="pill" style="background:${dc.bg};color:${dc.c}">${S.diff}</span>
-      ${over?'':`<span style="font-size:13px;color:#888">${al===3?`<b style="color:#111">3pt</b> se indovini ora`:`<b style="color:#111">${al}pt</b> · ${al} tentativ${al===1?'o':'i'}`}</span>`}
+    <div style="margin-bottom:12px">
+      ${over?'':`<span style="font-size:13px;color:#888">${al===3?`<b style="color:#111">3pt</b> se indovini ora`:`<b style="color:#111">${al}pt</b> se indovini ora`}</span>`}
     </div>
     <div style="border:1px solid #ebebeb;border-radius:10px;overflow:hidden;margin-bottom:14px">
       <table><thead><tr><th>Anni</th><th>Squadra</th><th class="r">P</th><th class="r">G</th></tr></thead>
@@ -238,6 +251,7 @@ function scPlaying(){
     </div>
     ${hints?`<div style="margin-bottom:14px">${hints}</div>`:''}
     ${bot}
+    ${lbInGame}
   `;
 }
 
@@ -293,13 +307,14 @@ function scFinal(){
   `;
 }
 
-// ── RENDER ─────────────────────────────────────────────────────────────
+// ── RENDER ──────────────────────────────────────────────────────────────────
 function render(){
   if(S.screen==='leaderboard'){scLeaderboard();return;}
   const map={setname:scSetname,home:scHome,loading:scLoading,playing:scPlaying,final:scFinal};
   document.getElementById('app').innerHTML=(map[S.screen]||scHome)();
   bind();
 }
+
 function bind(){
   const on=(id,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener('click',fn);};
 
