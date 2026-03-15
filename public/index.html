@@ -60,8 +60,9 @@ const S = {
   screen: savedUser ? 'home' : 'setname',
   username: savedUser,
   player: null, nextPlayer: null, diff: '',
-  hints:[false,false,false], attempts:0, answer:'', result:null,
-  score:0, q:0, err:null
+  hints:[false,false,false], attempts:0, hintsUsed:0, answer:'', result:null,
+  score:0, q:0, err:null,
+  showLbInGame: false, lbData: null
 };
 
 // ── HELPERS ────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ function prefetch(){
   fetchPlayer(d).then(p=>{S.nextPlayer={player:p,diff:d}}).catch(()=>{});
 }
 async function loadQ(){
-  S.hints=[false,false,false];S.attempts=0;S.answer='';S.result=null;S.err=null;
+  S.hints=[false,false,false];S.attempts=0;S.hintsUsed=0;S.answer='';S.result=null;S.err=null;S.showLbInGame=false;
   if(S.nextPlayer){
     S.player=S.nextPlayer.player;S.diff=S.nextPlayer.diff;S.nextPlayer=null;
     S.screen='playing';render();prefetch();
@@ -109,11 +110,11 @@ function checkAns(){
   const ok=[S.player.nome,...(S.player.nomi_alternativi||[])].map(nrm)
     .some(a=>n===a||a.split(' ').some(w=>w.length>3&&n===w));
   if(ok){
-    const pts=Math.max(0,3-S.attempts);
+    const pts=Math.max(0,3-S.hintsUsed);
     S.result={correct:true,pts};S.score+=pts;S.q++;lbSave(pts);
   } else {
     const na=S.attempts+1;
-    if(na<=3)S.hints[na-1]=true;
+    if(na<=3){S.hints[na-1]=true;S.hintsUsed=Math.min(3,S.hintsUsed+1);}
     S.attempts=na;S.answer='';
     if(na>=3){S.result={correct:false,pts:0};S.q++;lbSave(0);}
     else{
@@ -122,6 +123,14 @@ function checkAns(){
         setTimeout(()=>{el.classList.remove('shake');el.style.borderColor='#e0e0e0'},400);}
     }
   }
+  render();
+}
+function useHint(){
+  if(S.result) return;
+  const nextHint=S.hints.findIndex(h=>!h);
+  if(nextHint===-1) return; // all hints already shown
+  S.hints[nextHint]=true;
+  S.hintsUsed=Math.min(3,S.hintsUsed+1);
   render();
 }
 function surrender(){if(S.result)return;S.result={correct:false,pts:0};S.q++;lbSave(0);render();}
@@ -311,6 +320,15 @@ function bind(){
   on('btn-next',()=>loadQ());
   on('btn-check',checkAns);
   on('btn-sur',surrender);
+  on('btn-hint',useHint);
+  on('btn-lb-game',async()=>{
+    S.showLbInGame=!S.showLbInGame;
+    if(S.showLbInGame){
+      try{const r=await fetch('/api/scores');S.lbData=r.ok?await r.json():[];}
+      catch{S.lbData=[];}
+    }
+    render();
+  });
 
   const ai=document.getElementById('ai');
   if(ai){
