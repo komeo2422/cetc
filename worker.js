@@ -1,12 +1,21 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const POOL_SIZE  = 50;
-const CACHE_ID   = "pool_v1";
+const CACHE_ID  = "pool_v1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Content-Type",
   "Content-Type": "application/json",
 };
+
+// ── LOAD PLAYER DATABASE ──────────────────────────────────────────────────
+let _playerDB = null;
+async function getPlayerDB(env) {
+  if (_playerDB) return _playerDB;
+  const res = await env.ASSETS.fetch("https://cetc.komeobuschito.workers.dev/serie_a_players.json");
+  if (!res.ok) throw new Error("Cannot load player database");
+  _playerDB = await res.json();
+  return _playerDB;
+}
 
 // ── CLAUDE ────────────────────────────────────────────────────────────────
 async function askClaude(prompt, maxTokens, apiKey) {
@@ -70,6 +79,18 @@ async function poolConsume(sbUrl, sbKey, players, name) {
   const updated = players.filter(p => p !== name);
   await poolWrite(sbUrl, sbKey, updated);
   return updated;
+}
+
+// Build a fresh shuffled pool from the static DB
+async function buildPool(env) {
+  const db = await getPlayerDB(env);
+  const names = db.map(p => p.nome).filter(n => n && n.includes(" "));
+  // Shuffle
+  for (let i = names.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [names[i], names[j]] = [names[j], names[i]];
+  }
+  return names.slice(0, 100); // take 100 random players per pool
 }
 
 // ── WIKIDATA ──────────────────────────────────────────────────────────────
@@ -169,14 +190,14 @@ async function handleAsk(request, env) {
 
   let { players, expired } = await poolRead(SB_URL, SB_KEY);
   if (expired || players.length === 0) {
-    players = await fetchFromWikidata();
+    players = await buildPool(env);
     await poolWrite(SB_URL, SB_KEY, players, true);
   }
 
   const MAX_ATTEMPTS = 5;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (!players.length) {
-      players = await fetchFromWikidata();
+      players = await buildPool(env);
       await poolWrite(SB_URL, SB_KEY, players, true);
     }
 
