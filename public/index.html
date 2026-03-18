@@ -180,7 +180,7 @@ function scPlaying(){
 
   const rows=p.carriera.map(r=>`<tr>
     <td style="color:#999;white-space:nowrap">${r.anni}</td>
-    <td style="font-weight:600">${r.squadra}</td>
+    <td style="font-weight:600">${r.prestito?`<span style="color:#aaa;font-weight:400">→ </span>`:''}${r.squadra}</td>
     <td class="r" style="color:#666">${r.presenze}</td>
     <td class="r" style="color:#666">${r.gol}</td>
   </tr>`).join('');
