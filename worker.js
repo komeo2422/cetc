@@ -230,8 +230,49 @@ ${rawContent}`, 600, AN_KEY);
         80, AN_KEY
       );
 
-      const parts = playerName.trim().split(" ");
-      const cognome = parts[parts.length - 1];
+  // Extract nationality and position from infobox
+  const natMatch  = content.match(/\|\s*(?:nationalteam|birth_place|nationality)[^\n]*\n[\s\S]*?\|\s*nat\w*\s*=\s*([^\n|]+)/i)
+                 || content.match(/\|\s*nat\w*\s*=\s*([^\n|{]+)/i);
+  const posMatch  = content.match(/\|\s*position\s*=\s*([^\n|{]+)/i);
+  const citizenship = content.match(/\|\s*birth_place\s*=\s*([^\n|{]+)/i);
+
+  // Also try parsing from categories
+  const natFromLabel = content.match(/\[\[Category:[A-Za-z\s]+(?:footballer|player)/i);
+
+  // Extract nationality from "nat =" field in infobox
+  let nazionalita = "";
+  const natField = content.match(/\|\s*nat\d*\s*=\s*([A-Z]{2,3})/g);
+  if (natField && natField.length > 0) {
+    const code = natField[0].match(/([A-Z]{2,3})$/)?.[1] || "";
+    const codeMap = {
+      ITA:"Italiano", ENG:"Inglese", FRA:"Francese", ESP:"Spagnolo",
+      BRA:"Brasiliano", ARG:"Argentino", NED:"Olandese", GER:"Tedesco",
+      POR:"Portoghese", CRO:"Croato", SRB:"Serbo", BEL:"Belga",
+      URU:"Uruguaiano", COL:"Colombiano", CHI:"Cileno", PAR:"Paraguaiano",
+      NOR:"Norvegese", SWE:"Svedese", DEN:"Danese", POL:"Polacco",
+      CZE:"Ceco", SVK:"Slovacco", HUN:"Ungherese", ROM:"Rumeno",
+      UKR:"Ucraino", RUS:"Russo", TUR:"Turco", GHA:"Ghanese",
+      CIV:"Ivoriano", SEN:"Senegalese", NGA:"Nigeriano", CMR:"Camerunese",
+      USA:"Americano", MEX:"Messicano", JAP:"Giapponese", KOR:"Sudcoreano",
+      AUS:"Australiano", SCO:"Scozzese", WAL:"Gallese", IRL:"Irlandese",
+      SUI:"Svizzero", AUT:"Austriaco", GRE:"Greco", ALB:"Albanese",
+      MKD:"Macedone", BIH:"Bosniaco", SVN:"Sloveno", MNE:"Montenegrino",
+    };
+    nazionalita = codeMap[code] || code;
+  }
+
+  // Position mapping
+  const posRaw = posMatch?.[1]?.trim().replace(/\[\[|\]\]/g,"") || "";
+  const posMap = {
+    "goalkeeper":"Portiere","defender":"Difensore","midfielder":"Centrocampista",
+    "forward":"Attaccante","striker":"Centravanti","winger":"Ala",
+    "centre-back":"Difensore centrale","central defender":"Difensore centrale",
+    "left back":"Terzino sinistro","right back":"Terzino destro",
+    "centre midfield":"Centrocampista","defensive midfield":"Mediano",
+    "attacking midfield":"Trequartista","left midfield":"Ala sinistra",
+    "right midfield":"Ala destra",
+  };
+  const ruolo = posMap[posRaw.toLowerCase()] || posRaw || "Calciatore";
 
       return new Response(JSON.stringify({
         nome: playerName,
