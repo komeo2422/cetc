@@ -7,7 +7,7 @@ const CORS = {
   "Content-Type": "application/json",
 };
 
-// ── PLAYER DATABASE ───────────────────────────────────────────────────────
+// ── PLAYER DATABASE (nomi verificati) ─────────────────────────────────────
 let _playerDB = null;
 async function getPlayerDB(env) {
   if (_playerDB) return _playerDB;
@@ -82,10 +82,13 @@ async function poolConsume(sbUrl, sbKey, players, name) {
 async function buildPool(env) {
   const db = await getPlayerDB(env);
   const valid = db.filter(p => {
-    if (!p.nome || !p.nome.includes(" ") || !p.carriera || p.carriera.length === 0) return false;
-    // Must have started career in 1990 or later
-    const earliest = Math.min(...p.carriera.map(c => parseInt(c.anni?.split("-")[0]) || 9999));
-    return earliest >= 1990;
+    if (!p.nome || !p.nome.includes(" ")) return false;
+    // Solo giocatori con carriera iniziata dal 1990
+    if (p.carriera && p.carriera.length > 0) {
+      const earliest = Math.min(...p.carriera.map(c => parseInt(c.anni?.split("-")[0]) || 9999));
+      if (earliest < 1990) return false;
+    }
+    return true;
   });
   for (let i = valid.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -94,29 +97,86 @@ async function buildPool(env) {
   return valid.slice(0, 100).map(p => p.nome);
 }
 
+// ── WIKIPEDIA (dati accurati) ─────────────────────────────────────────────
+const WP_HEADERS = {
+  "User-Agent": "CetcFootballTrivia/1.0 (https://cetc.komeobuschito.workers.dev; matteo.buschittari@gmail.com)",
+  "Accept": "application/json",
+};
+
+async function getWikipediaCareer(playerName) {
+  const searchRes = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(playerName + " footballer")}&format=json&origin=*&srlimit=1`,
+    { headers: WP_HEADERS }
+  );
+  const results = (await searchRes.json()).query?.search || [];
+  if (!results.length) throw new Error("Wikipedia not found: " + playerName);
+
+  const pageRes = await fetch(
+    `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(results[0].title)}&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*`,
+    { headers: WP_HEADERS }
+  );
+  const pages = (await pageRes.json()).query?.pages || {};
+  const content = Object.values(pages)[0]?.revisions?.[0]?.slots?.main?.["*"] || "";
+  if (!content) throw new Error("Empty Wikipedia page");
+
+  // Parse infobox clubs/caps/goals/years fields for accurate structured data
+  const yearsRaw  = content.match(/\|\s*years\s*=\s*([\s\S]+?)(?=\n\s*\|[a-zA-Z])/)?.[1] || "";
+  const clubsRaw  = content.match(/\|\s*clubs\s*=\s*([\s\S]+?)(?=\n\s*\|[a-zA-Z])/)?.[1] || "";
+  const capsRaw   = content.match(/\|\s*caps\s*=\s*([\s\S]+?)(?=\n\s*\|[a-zA-Z])/)?.[1] || "";
+  const goalsRaw  = content.match(/\|\s*goals\s*=\s*([\s\S]+?)(?=\n\s*\|[a-zA-Z])/)?.[1] || "";
+
+  function parseList(raw) {
+    return raw
+      .replace(/\{\{plainlist\|?\s*/gi, "")
+      .replace(/\}\}/g, "")
+      .split("\n")
+      .map(l => l.replace(/\*\s*/, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\{\{[^}]+\}\}/g, "").replace(/'''|''/g, "").trim())
+      .filter(Boolean);
+  }
+
+  const years  = parseList(yearsRaw);
+  const clubs  = parseList(clubsRaw);
+  const caps   = parseList(capsRaw).map(v => parseInt(v.replace(/[^0-9]/g, "")) || 0);
+  const goals  = parseList(goalsRaw).map(v => parseInt(v.replace(/[^0-9]/g, "")) || 0);
+
+  if (clubs.length === 0) {
+    // Fallback to infobox raw
+    const infobox = content.match(/\{\{Infobox football biography([\s\S]{200,6000}?)\}\}/i)?.[0] || content.substring(0, 5000);
+    return { title: results[0].title, carriera: null, rawContent: infobox };
+  }
+
+  // Build career array — detect loans from club name containing "loan" or "→"
+  const carriera = clubs.map((club, i) => {
+    const isLoan = /→|loan|\(in\s*prestito\)/i.test(club);
+    const cleanClub = club.replace(/→\s*/, "").replace(/\s*\(loan\)/i, "").replace(/\s*\(in\s*prestito\)/i, "").trim();
+    return {
+      anni: years[i] || "?",
+      squadra: cleanClub,
+      prestito: isLoan,
+      presenze: caps[i] || 0,
+      gol: goals[i] || 0,
+    };
+  }).filter(c =>
+    // Remove national team entries
+    !/national|nazionale|under-|unter-|olimp|youth/i.test(c.squadra)
+  );
+
+  return { title: results[0].title, carriera, rawContent: null };
+}
+
 // ── /api/ask ──────────────────────────────────────────────────────────────
 async function handleAsk(request, env) {
-  const { diff } = await request.json();
   const AN_KEY = env.ANTHROPIC_API_KEY;
   const SB_URL = env.SUPABASE_URL;
   const SB_KEY = env.SUPABASE_KEY;
 
   if (!AN_KEY) return new Response(JSON.stringify({ error: "ANTHROPIC_API_KEY not set" }), { status: 500, headers: CORS });
 
-  const db = await getPlayerDB(env);
-  const dbMap = Object.fromEntries(db.map(p => [p.nome, p]));
-
   let { players, expired } = await poolRead(SB_URL, SB_KEY);
   if (expired || players.length === 0) {
     players = await buildPool(env);
     await poolWrite(SB_URL, SB_KEY, players, true);
   }
-
-  const diffGuide = {
-    Facile:     "famoso a livello internazionale: campione del mondo, Pallone d'Oro, icona assoluta della Serie A",
-    Intermedio: "conosciuto dagli appassionati italiani: almeno 2-3 stagioni solide in Serie A",
-    Difficile:  "poco noto: poche presenze in Serie A, giocato principalmente in serie minori",
-  };
 
   const MAX_ATTEMPTS = 5;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -130,54 +190,57 @@ async function handleAsk(request, env) {
     players = await poolConsume(SB_URL, SB_KEY, players, playerName);
 
     try {
-      const p = dbMap[playerName];
-      if (!p) throw new Error("Player not found in DB: " + playerName);
-      if (!p.carriera || p.carriera.length === 0) throw new Error("No career data");
+      const { title, carriera, rawContent } = await getWikipediaCareer(playerName);
 
-      // Must have started career 1990+
-      const earliest = Math.min(...p.carriera.map(c => parseInt(c.anni?.split("-")[0]) || 9999));
-      if (earliest < 1990) throw new Error("career_too_old");
+      let finalCarriera = carriera;
 
-      // Count Serie A apps
-      const SERIE_A_CLUBS = ["Milan","Inter","Juventus","Roma","Lazio","Fiorentina","Napoli",
-        "Torino","Sampdoria","Genoa","Atalanta","Bologna","Parma","Udinese","Cagliari",
-        "Palermo","Reggina","Chievo","Lecce","Brescia","Bari","Verona","Vicenza","Piacenza",
-        "Perugia","Empoli","Siena","Livorno","Catania","Cesena","Crotone","Benevento",
-        "Sassuolo","Hellas Verona","Frosinone","SPAL","Spezia","Venezia","Salernitana"];
-      const serieAApps = p.carriera
-        .filter(c => SERIE_A_CLUBS.some(club => c.squadra?.includes(club)))
-        .reduce((s, c) => s + (c.presenze || 0), 0);
+      // If structured parsing failed, use Claude to extract
+      if (!finalCarriera) {
+        const json = await askClaude(`Estrai la carriera da calciatore (non allenatore, non nazionale) da questo testo Wikipedia per "${title}".
+Ogni riga = una squadra o prestito separato. Indica prestito:true se è un prestito.
+Escludi nazionali e squadre giovanili.
+RISPONDI SOLO JSON:
+[{"anni":"XXXX-XXXX","squadra":"...","prestito":false,"presenze":0,"gol":0}]
+
+Testo:
+${rawContent}`, 600, AN_KEY);
+        finalCarriera = JSON.parse(json.replace(/```json|```/g, "").trim());
+      }
+
+      if (!finalCarriera || finalCarriera.length === 0) throw new Error("no career");
+
+      // Check Serie A presence (20+ apps)
+      const SERIE_A = ["milan","inter","juventus","roma","lazio","fiorentina","napoli",
+        "torino","sampdoria","genoa","atalanta","bologna","parma","udinese","cagliari",
+        "palermo","reggina","chievo","lecce","brescia","bari","verona","vicenza","piacenza",
+        "perugia","empoli","siena","livorno","catania","cesena","crotone","benevento",
+        "sassuolo","frosinone","spal","spezia","venezia","salernitana","hellas"];
+      const serieAApps = finalCarriera
+        .filter(c => SERIE_A.some(s => c.squadra.toLowerCase().includes(s)))
+        .reduce((sum, c) => sum + (c.presenze || 0), 0);
       if (serieAApps < 20) throw new Error("too_few_serie_a");
 
-      // Generate episodio with Claude (fast — just one sentence)
+      // Check career start 1990+
+      const earliest = Math.min(...finalCarriera.map(c => parseInt(c.anni?.split("-")[0]) || 9999));
+      if (earliest < 1990) throw new Error("career_too_old");
+
+      // Generate episodio
       const episodio = await askClaude(
-        `In una frase sola, scrivi un fatto o episodio noto al pubblico italiano sul calciatore ${p.nome}. Solo la frase, nient'altro.`,
+        `In una frase sola, scrivi un fatto o episodio noto al pubblico italiano sul calciatore ${playerName}. Solo la frase, nient'altro.`,
         80, AN_KEY
       );
 
-      // Build cognome for nomi_alternativi
-      const parts = p.nome.trim().split(" ");
+      const parts = playerName.trim().split(" ");
       const cognome = parts[parts.length - 1];
 
-      // Filter out national team entries
-      p.carriera = p.carriera.filter(c => {
-      const s = (c.squadra || "").toLowerCase();
-      return !s.includes("national") && !s.includes("nazionale") && 
-         !s.includes("under") && !s.includes("unter") && 
-         !s.includes("olimp") && !s.includes("youth");
-      });
-if (p.carriera.length === 0) throw new Error("no club career");
-      
-      const result = {
-        nome: p.nome,
+      return new Response(JSON.stringify({
+        nome: playerName,
         nomi_alternativi: [cognome],
-        ruolo: p.ruolo || "Calciatore",
-        nazionalita: p.nazionalita || "",
-        episodio: episodio,
-        carriera: p.carriera,
-      };
-
-      return new Response(JSON.stringify(result), { status: 200, headers: CORS });
+        ruolo: "",
+        nazionalita: "",
+        episodio,
+        carriera: finalCarriera,
+      }), { status: 200, headers: CORS });
 
     } catch (e) {
       console.error("attempt failed:", e.message);
@@ -233,15 +296,6 @@ export default {
         sk: !!env.SUPABASE_KEY,
         assets: !!env.ASSETS,
       }), { status: 200, headers: CORS });
-    }
-
-    if (path === "/api/testanthropic") {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 10, messages: [{ role: "user", content: "Hi" }] }),
-      });
-      return new Response(await res.text(), { status: 200, headers: CORS });
     }
 
     try {
