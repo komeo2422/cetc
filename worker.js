@@ -243,6 +243,8 @@ export default {
         su: !!env.SUPABASE_URL,
         sk: !!env.SUPABASE_KEY,
         assets: !!env.ASSETS,
+        cache_id: CACHE_ID,
+        version: "v9-loan-overlap",
       }), { status: 200, headers: CORS });
     }
 
@@ -251,7 +253,4 @@ export default {
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
       if (path === "/api/scores" && method === "POST") return await handleScoresPost(request, env);
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
-    }
-
-    if (env.ASSETS) retu
+      return new Response(JSON.stringify({ error: e.message }), 
