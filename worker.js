@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v2";
+const CACHE_ID  = "pool_v3";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -27,27 +27,39 @@ async function getPlayerDB(env) {
   return _playerDB;
 }
 
+const NATIONAL_RE = /national|nazionale|under-|unter-|olimp|youth|u\d{2}/i;
+
+function clubCareer(rawCarriera) {
+  return (rawCarriera || []).filter(c => !NATIONAL_RE.test(c.squadra || ""));
+}
+
 function isValidPlayer(p) {
   if (!p.nome || !p.nome.includes(" ")) return false;
-  const carriera = p.carriera;
-  if (!carriera || carriera.length === 0) return false;
 
-  // Must have career starting 1990 or later
+  // Work on club-only career (strip national teams/youth)
+  const carriera = clubCareer(p.carriera);
+
+  // At least 3 clubs makes the quiz interesting
+  if (carriera.length < 3) return false;
+
+  // Need year data on at least half the entries
   const years = carriera
     .map(c => parseInt(c.anni?.split("-")[0]))
-    .filter(y => !isNaN(y));
-  if (years.length === 0) return false;
+    .filter(y => !isNaN(y) && y > 1900);
+  if (years.length < Math.ceil(carriera.length / 2)) return false;
+
+  // Career must start 1990 or later
   if (Math.min(...years) < 1990) return false;
 
-  // Must have at least one Serie A club with data
+  // Must have at least one Serie A club
   const hasSerieA = carriera.some(c =>
     SERIE_A.some(s => c.squadra?.toLowerCase().includes(s))
   );
   if (!hasSerieA) return false;
 
-  // Must have some appearances recorded (not all zeros across entire career)
+  // At least 20 total recorded appearances
   const totalApps = carriera.reduce((s, c) => s + (c.presenze || 0), 0);
-  if (totalApps === 0) return false;
+  if (totalApps < 20) return false;
 
   return true;
 }
@@ -130,12 +142,8 @@ async function handleAsk(request, env) {
 
     if (!player || !isValidPlayer(player)) continue;
 
-    // Filter out national team / youth entries from career display
-    const carriera = player.carriera.filter(c =>
-      !/national|nazionale|under-|unter-|olimp|youth|u\d{2}/i.test(c.squadra || "")
-    );
-
-    if (carriera.length === 0) continue;
+    const carriera = clubCareer(player.carriera);
+    if (carriera.length < 3) continue;
 
     return new Response(JSON.stringify({
       nome: player.nome,
