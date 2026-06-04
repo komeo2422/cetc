@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v3";
+const CACHE_ID  = "pool_v4";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -29,37 +29,74 @@ async function getPlayerDB(env) {
 
 const NATIONAL_RE = /national|nazionale|under-|unter-|olimp|youth|u\d{2}/i;
 
+function parseYear(s) {
+  const n = parseInt((s || '').split('-')[0]);
+  return isNaN(n) || n < 1900 ? null : n;
+}
+
+function parseYearEnd(s) {
+  const parts = (s || '').split('-');
+  const n = parseInt(parts[1] || parts[0]);
+  return isNaN(n) || n < 1900 ? null : n;
+}
+
+// Strip national teams, youth squads, and entries with unknown years
 function clubCareer(rawCarriera) {
-  return (rawCarriera || []).filter(c => !NATIONAL_RE.test(c.squadra || ""));
+  return (rawCarriera || []).filter(c =>
+    !NATIONAL_RE.test(c.squadra || "") &&
+    c.anni && c.anni !== '?' &&
+    parseYear(c.anni) !== null
+  );
+}
+
+// Detect loan entries: a club is a loan if its year range falls inside
+// another club's range that has 0 presenze (the "parent" / registered club)
+function detectLoans(carriera) {
+  return carriera.map(c => {
+    const cs = parseYear(c.anni);
+    const ce = parseYearEnd(c.anni) ?? cs;
+    if (!cs) return c;
+
+    const isLoan = carriera.some(other => {
+      if (other === c) return false;
+      const os = parseYear(other.anni);
+      const oe = parseYearEnd(other.anni) ?? os;
+      if (!os) return false;
+      return (
+        os <= cs &&           // parent starts before or same
+        oe >= ce &&           // parent ends after or same
+        (other.presenze || 0) === 0 &&  // parent has no apps (player was away)
+        (c.presenze || 0) > 0           // this entry has real apps
+      );
+    });
+
+    return isLoan ? { ...c, prestito: true } : c;
+  });
 }
 
 function isValidPlayer(p) {
   if (!p.nome || !p.nome.includes(" ")) return false;
 
-  // Work on club-only career (strip national teams/youth)
   const carriera = clubCareer(p.carriera);
 
-  // At least 3 clubs makes the quiz interesting
+  // At least 3 club entries (no ?)
   if (carriera.length < 3) return false;
 
-  // Need year data on at least half the entries
-  const years = carriera
-    .map(c => parseInt(c.anni?.split("-")[0]))
-    .filter(y => !isNaN(y) && y > 1900);
-  if (years.length < Math.ceil(carriera.length / 2)) return false;
+  const years = carriera.map(c => parseYear(c.anni)).filter(Boolean);
+  if (years.length < carriera.length) return false; // all must have valid years
 
-  // Career must start 1990 or later
+  // Career starts 1990+
   if (Math.min(...years) < 1990) return false;
 
-  // Must have at least one Serie A club
+  // At least one Serie A club
   const hasSerieA = carriera.some(c =>
     SERIE_A.some(s => c.squadra?.toLowerCase().includes(s))
   );
   if (!hasSerieA) return false;
 
-  // At least 20 total recorded appearances
-  const totalApps = carriera.reduce((s, c) => s + (c.presenze || 0), 0);
-  if (totalApps < 20) return false;
+  // At least 20 presenze at a SINGLE club
+  const maxAtOneClub = Math.max(...carriera.map(c => c.presenze || 0));
+  if (maxAtOneClub < 20) return false;
 
   return true;
 }
@@ -142,7 +179,7 @@ async function handleAsk(request, env) {
 
     if (!player || !isValidPlayer(player)) continue;
 
-    const carriera = clubCareer(player.carriera);
+    const carriera = detectLoans(clubCareer(player.carriera));
     if (carriera.length < 3) continue;
 
     return new Response(JSON.stringify({
