@@ -9,8 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Deploy
+      - name: Show files
+        run: |
+          echo "=== wrangler.toml ==="
+          cat wrangler.toml
+          echo "=== public/ size ==="
+          du -sh public/
+          ls -la public/
+      - name: Deploy with wrangler
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          wranglerVersion: "4"
+          wranglerVersion: "4.17.0"
+          command: deploy
+      - name: Verify
+        run: |
+          curl -s "https://cetc.komeobuschito.workers.dev/api/test?after=deploy" || echo "verify-failed"
