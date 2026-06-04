@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v7";
+const CACHE_ID  = "pool_v8";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -50,7 +50,8 @@ function clubCareer(rawCarriera) {
 }
 
 // Detect loan entries: a club is a loan if its year range falls inside
-// another club's range that has 0 presenze (the "parent" / registered club)
+// another club's longer range with more apps (the "parent" / registered club).
+// Also marks loans when the parent has 0 apps (player was away the whole time).
 function detectLoans(carriera) {
   return carriera.map(c => {
     const cs = parseYear(c.anni);
@@ -62,12 +63,13 @@ function detectLoans(carriera) {
       const os = parseYear(other.anni);
       const oe = parseYearEnd(other.anni) ?? os;
       if (!os) return false;
-      return (
-        os <= cs &&           // parent starts before or same
-        oe >= ce &&           // parent ends after or same
-        (other.presenze || 0) === 0 &&  // parent has no apps (player was away)
-        (c.presenze || 0) > 0           // this entry has real apps
-      );
+      // Other's range strictly contains this one's range
+      const containsRange = os <= cs && oe >= ce && (oe - os) > (ce - cs);
+      if (!containsRange) return false;
+      // Parent is a longer stint with more apps OR with 0 apps (player away)
+      const op = other.presenze || 0;
+      const cp = c.presenze || 0;
+      return op === 0 || op > cp;
     });
 
     return isLoan ? { ...c, prestito: true } : c;
@@ -94,11 +96,11 @@ function isValidPlayer(p) {
   );
   if (!hasSerieA) return false;
 
-  // At least 20 presenze at a SINGLE Serie A club
+  // At least 50 presenze at a SINGLE Serie A club
   const maxAtSerieAClub = Math.max(...carriera
     .filter(c => SERIE_A.some(s => c.squadra?.toLowerCase().includes(s)))
     .map(c => c.presenze || 0), 0);
-  if (maxAtSerieAClub < 20) return false;
+  if (maxAtSerieAClub < 50) return false;
 
   return true;
 }
@@ -251,10 +253,4 @@ export default {
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
       if (path === "/api/scores" && method === "POST") return await handleScoresPost(request, env);
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
-    }
-
-    if (env.ASSETS) return env.ASSETS.fetch(request);
-    return new Response("Not found", { status: 404 });
-  },
-};
+      return new Response(JSON.stringify({ error: e.message }), { status:

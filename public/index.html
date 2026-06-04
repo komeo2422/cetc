@@ -49,7 +49,7 @@ const TIERS=[
 ];
 const HLBLS=['Ruolo','Nazionalità','Episodio'];
 
-function nrm(s){return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,'').trim()}
+function nrm(s){return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim()}
 function tier(avg){return TIERS.find(t=>avg>=t.min)||TIERS[3]}
 
 const savedUser = LS.getItem('cetc_user')||'';
@@ -102,8 +102,19 @@ async function lbSave(pts){
 function checkAns(){
   const ans=S.answer.trim();if(!ans||!S.player||S.result)return;
   const n=nrm(ans);
+  // Accetta: nome completo, qualunque parola del nome >=2 caratteri (cognome incluso),
+  // o le ultime 2-3 parole concatenate (es. "dos santos")
   const ok=[S.player.nome,...(S.player.nomi_alternativi||[])].map(nrm)
-    .some(a=>n===a||a.split(' ').some(w=>w.length>3&&n===w));
+    .some(a=>{
+      if(n===a) return true;
+      const ws=a.split(' ').filter(w=>w.length>=2);
+      if(ws.some(w=>n===w)) return true;
+      // multi-word suffix match (last 2 or 3 words)
+      for(let k=2;k<=Math.min(3,ws.length);k++){
+        if(n===ws.slice(-k).join(' ')) return true;
+      }
+      return false;
+    });
   if(ok){
     const pts=Math.max(0,3-S.hintsUsed);
     S.result={correct:true,pts};S.score+=pts;S.q++;lbSave(pts);
@@ -347,22 +358,4 @@ function bind(){
   on('btn-lb-game',async()=>{
     S.showLbInGame=!S.showLbInGame;
     if(S.showLbInGame){
-      try{const r=await fetch('/api/scores');S.lbData=r.ok?await r.json():[];}
-      catch{S.lbData=[];}
-    }
-    render();
-  });
-
-  const ai=document.getElementById('ai');
-  if(ai){
-    ai.addEventListener('input',e=>{S.answer=e.target.value;});
-    ai.addEventListener('keydown',e=>{if(e.key==='Enter')checkAns();});
-    setTimeout(()=>ai.focus(),50);
-  }
-}
-
-if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
-render();
-</script>
-</body>
-</html>
+      try{const r=await fetch('/api/scores
