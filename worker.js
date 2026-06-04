@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v8";
+const CACHE_ID  = "pool_v9";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -49,27 +49,25 @@ function clubCareer(rawCarriera) {
   );
 }
 
-// Detect loan entries: a club is a loan if its year range falls inside
-// another club's longer range with more apps (the "parent" / registered club).
-// Also marks loans when the parent has 0 apps (player was away the whole time).
+// Detect loan entries: a stint with >0 apps is a loan if there's ANOTHER
+// stint at a different club with 0 apps whose years overlap (the "parent"
+// club that registered the player while loaning them out).
 function detectLoans(carriera) {
   return carriera.map(c => {
     const cs = parseYear(c.anni);
     const ce = parseYearEnd(c.anni) ?? cs;
     if (!cs) return c;
+    if (!c.presenze) return c;  // 0-apps stints are parents, not loans
 
     const isLoan = carriera.some(other => {
       if (other === c) return false;
+      if (other.squadra === c.squadra) return false;  // same club, not a loan
+      if ((other.presenze || 0) !== 0) return false;  // parent has 0 apps
       const os = parseYear(other.anni);
       const oe = parseYearEnd(other.anni) ?? os;
       if (!os) return false;
-      // Other's range strictly contains this one's range
-      const containsRange = os <= cs && oe >= ce && (oe - os) > (ce - cs);
-      if (!containsRange) return false;
-      // Parent is a longer stint with more apps OR with 0 apps (player away)
-      const op = other.presenze || 0;
-      const cp = c.presenze || 0;
-      return op === 0 || op > cp;
+      // Years overlap (parent and loan share at least one year)
+      return os <= ce && oe >= cs;
     });
 
     return isLoan ? { ...c, prestito: true } : c;
@@ -253,4 +251,7 @@ export default {
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
       if (path === "/api/scores" && method === "POST") return await handleScoresPost(request, env);
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), { status:
+      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
+    }
+
+    if (env.ASSETS) retu
