@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v4";
+const CACHE_ID  = "pool_v5";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -94,9 +94,11 @@ function isValidPlayer(p) {
   );
   if (!hasSerieA) return false;
 
-  // At least 20 presenze at a SINGLE club
-  const maxAtOneClub = Math.max(...carriera.map(c => c.presenze || 0));
-  if (maxAtOneClub < 20) return false;
+  // At least 20 presenze at a SINGLE Serie A club
+  const maxAtSerieAClub = Math.max(...carriera
+    .filter(c => SERIE_A.some(s => c.squadra?.toLowerCase().includes(s)))
+    .map(c => c.presenze || 0), 0);
+  if (maxAtSerieAClub < 20) return false;
 
   return true;
 }
