@@ -26,6 +26,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}
 th{padding:8px 10px;color:#bbb;font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;background:#f7f7f7;text-align:left}
 th.r,td.r{text-align:center}
 td{padding:8px 10px;border-top:1px solid #f0f0f0}
+.loan-row td{background:#fafafa}
 @keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
 .shake{animation:shake .4s}
 .hint{display:flex;gap:10px;padding:9px 12px;background:#f8f8f8;border:1px solid #ebebeb;border-radius:8px;font-size:13px;margin-bottom:6px}
@@ -49,7 +50,7 @@ const TIERS=[
 ];
 const HLBLS=['Ruolo','Nazionalità','Episodio'];
 
-function nrm(s){return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').trim()}
+function nrm(s){return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9 ]/g,'').trim()}
 function tier(avg){return TIERS.find(t=>avg>=t.min)||TIERS[3]}
 
 const savedUser = LS.getItem('cetc_user')||'';
@@ -87,7 +88,11 @@ async function loadQ(){
 
 // ── LEADERBOARD ────────────────────────────────────────────────────────────
 async function lbLoad(){
-  try{const r=await fetch('/api/scores');return r.ok?r.json():[];}catch{return[];}
+  try{
+    const r=await fetch('/api/scores');
+    if(!r.ok) return [];
+    return r.json();
+  }catch{return[];}
 }
 async function lbSave(pts){
   try{await fetch('/api/scores',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:S.username,pts})});}
@@ -178,12 +183,17 @@ function scPlaying(){
   const al=3-S.hintsUsed;
   const allHints=S.hints.every(Boolean);
 
-  const rows=p.carriera.map(r=>`<tr>
-    <td style="color:#999;white-space:nowrap">${r.anni}</td>
-    <td style="font-weight:600">${r.prestito?`<span style="color:#aaa;font-weight:400">→ </span>`:''}${r.squadra}</td>
-    <td class="r" style="color:#666">${r.presenze}</td>
-    <td class="r" style="color:#666">${r.gol}</td>
-  </tr>`).join('');
+  const rows=p.carriera.map(r=>{
+    // Detect loan: explicit flag OR club name starts with "→"
+    const isLoan = r.prestito || (r.squadra||'').startsWith('→');
+    const club = (r.squadra||'').replace(/^→\s*/,'');
+    return `<tr${isLoan?' class="loan-row"':''}>
+    <td style="color:${isLoan?'#bbb':'#999'};white-space:nowrap">${r.anni}</td>
+    <td style="font-weight:${isLoan?400:600};color:${isLoan?'#999':'#111'};font-style:${isLoan?'italic':'normal'}">${isLoan?`(${club})`:club}</td>
+    <td class="r" style="color:${isLoan?'#ccc':'#666'}">${r.presenze||0}</td>
+    <td class="r" style="color:${isLoan?'#ccc':'#666'}">${r.gol||0}</td>
+  </tr>`;
+  }).join('');
 
   const hints=S.hints.map((on,i)=>on?`<div class="hint">
     <span class="hint-lbl">${HLBLS[i]}</span>
