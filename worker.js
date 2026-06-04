@@ -17,7 +17,6 @@ const SERIE_A = [
   "ternana","triestina","pescara","cremonese","monza","lecco","como","lucchese",
 ];
 
-// ── PLAYER DATABASE ────────────────────────────────────────────────────────
 let _playerDB = null;
 async function getPlayerDB(env) {
   if (_playerDB) return _playerDB;
@@ -40,7 +39,6 @@ function parseYearEnd(s) {
   return isNaN(n) || n < 1900 ? null : n;
 }
 
-// Strip national teams, youth squads, and entries with unknown years
 function clubCareer(rawCarriera) {
   return (rawCarriera || []).filter(c =>
     !NATIONAL_RE.test(c.squadra || "") &&
@@ -49,61 +47,43 @@ function clubCareer(rawCarriera) {
   );
 }
 
-// Detect loan entries: a stint with >0 apps is a loan if there's ANOTHER
-// stint at a different club with 0 apps whose years overlap (the "parent"
-// club that registered the player while loaning them out).
 function detectLoans(carriera) {
   return carriera.map(c => {
     const cs = parseYear(c.anni);
     const ce = parseYearEnd(c.anni) ?? cs;
     if (!cs) return c;
-    if (!c.presenze) return c;  // 0-apps stints are parents, not loans
-
+    if (!c.presenze) return c;
     const isLoan = carriera.some(other => {
       if (other === c) return false;
-      if (other.squadra === c.squadra) return false;  // same club, not a loan
-      if ((other.presenze || 0) !== 0) return false;  // parent has 0 apps
+      if (other.squadra === c.squadra) return false;
+      if ((other.presenze || 0) !== 0) return false;
       const os = parseYear(other.anni);
       const oe = parseYearEnd(other.anni) ?? os;
       if (!os) return false;
-      // Years overlap (parent and loan share at least one year)
       return os <= ce && oe >= cs;
     });
-
     return isLoan ? { ...c, prestito: true } : c;
   });
 }
 
 function isValidPlayer(p) {
   if (!p.nome || !p.nome.includes(" ")) return false;
-
   const carriera = clubCareer(p.carriera);
-
-  // At least 3 club entries (no ?)
   if (carriera.length < 3) return false;
-
   const years = carriera.map(c => parseYear(c.anni)).filter(Boolean);
-  if (years.length < carriera.length) return false; // all must have valid years
-
-  // Career starts 1990+
+  if (years.length < carriera.length) return false;
   if (Math.min(...years) < 1990) return false;
-
-  // At least one Serie A club
   const hasSerieA = carriera.some(c =>
     SERIE_A.some(s => c.squadra?.toLowerCase().includes(s))
   );
   if (!hasSerieA) return false;
-
-  // At least 50 presenze at a SINGLE Serie A club
   const maxAtSerieAClub = Math.max(...carriera
     .filter(c => SERIE_A.some(s => c.squadra?.toLowerCase().includes(s)))
     .map(c => c.presenze || 0), 0);
   if (maxAtSerieAClub < 50) return false;
-
   return true;
 }
 
-// ── SUPABASE ──────────────────────────────────────────────────────────────
 function sbH(key) {
   return {
     apikey: key,
@@ -145,7 +125,6 @@ async function poolConsume(sbUrl, sbKey, players, name) {
 async function buildPool(env) {
   const db = await getPlayerDB(env);
   const valid = db.filter(isValidPlayer);
-  // Fisher-Yates shuffle
   for (let i = valid.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [valid[i], valid[j]] = [valid[j], valid[i]];
@@ -153,37 +132,28 @@ async function buildPool(env) {
   return valid.slice(0, 150).map(p => p.nome);
 }
 
-// ── /api/ask ──────────────────────────────────────────────────────────────
 async function handleAsk(request, env) {
   const SB_URL = env.SUPABASE_URL;
   const SB_KEY = env.SUPABASE_KEY;
-
   let { players, expired } = await poolRead(SB_URL, SB_KEY);
   if (expired || players.length === 0) {
     players = await buildPool(env);
     await poolWrite(SB_URL, SB_KEY, players, true);
   }
-
   const MAX_ATTEMPTS = 10;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (!players.length) {
       players = await buildPool(env);
       await poolWrite(SB_URL, SB_KEY, players, true);
     }
-
     const idx = Math.floor(Math.random() * players.length);
     const playerName = players[idx];
     players = await poolConsume(SB_URL, SB_KEY, players, playerName);
-
-    // Look up pre-built career from the JSON
     const db = await getPlayerDB(env);
     const player = db.find(p => p.nome === playerName);
-
     if (!player || !isValidPlayer(player)) continue;
-
     const carriera = detectLoans(clubCareer(player.carriera));
     if (carriera.length < 3) continue;
-
     return new Response(JSON.stringify({
       nome: player.nome,
       ruolo: player.ruolo || "",
@@ -191,11 +161,9 @@ async function handleAsk(request, env) {
       carriera,
     }), { status: 200, headers: CORS });
   }
-
   return new Response(JSON.stringify({ error: "No valid player found after retries" }), { status: 500, headers: CORS });
 }
 
-// ── /api/scores ───────────────────────────────────────────────────────────
 async function handleScoresGet(env) {
   const res = await fetch(
     `${env.SUPABASE_URL}/rest/v1/leaderboard?select=*&order=avg_score.desc`,
@@ -229,15 +197,12 @@ async function handleScoresPost(request, env) {
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: CORS });
 }
 
-// ── ROUTER ────────────────────────────────────────────────────────────────
 export default {
   async fetch(request, env) {
-    const url    = new URL(request.url);
-    const path   = url.pathname;
+    const url = new URL(request.url);
+    const path = url.pathname;
     const method = request.method;
-
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-
     if (path === "/api/test") {
       return new Response(JSON.stringify({
         su: !!env.SUPABASE_URL,
@@ -247,10 +212,14 @@ export default {
         version: "v9-loan-overlap",
       }), { status: 200, headers: CORS });
     }
-
     try {
       if (path === "/api/ask"    && method === "POST") return await handleAsk(request, env);
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
       if (path === "/api/scores" && method === "POST") return await handleScoresPost(request, env);
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), 
+      return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
+    }
+    if (env.ASSETS) return env.ASSETS.fetch(request);
+    return new Response("Not found", { status: 404 });
+  },
+};
