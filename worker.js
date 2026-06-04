@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v5";
+const CACHE_ID  = "pool_v7";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
