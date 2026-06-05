@@ -232,6 +232,7 @@ async function handleAsk(request, env) {
       nome: player.nome,
       ruolo: player.ruolo || "",
       nazionalita: player.nazionalita || "",
+      nomi_alternativi: player.nomi_alternativi || [],
       carriera,
     }), { status: 200, headers: CORS });
   }
