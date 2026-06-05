@@ -389,7 +389,16 @@ function bind(){
   }
 }
 
-if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js',{updateViaCache:'none'}).then(reg=>{
+    reg.update();
+    reg.addEventListener('updatefound',()=>{
+      const nw=reg.installing;
+      if(nw)nw.addEventListener('statechange',()=>{if(nw.state==='activated')location.reload();});
+    });
+  });
+  navigator.serviceWorker.addEventListener('controllerchange',()=>location.reload());
+}
 render();
 </script>
 </body>
