@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v9";
+const CACHE_ID  = "pool_v10";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -16,6 +16,67 @@ const SERIE_A = [
   "ancona","ascoli","avellino","foggia","messina","modena","novara","pisa",
   "ternana","triestina","pescara","cremonese","monza","lecco","como","lucchese",
 ];
+
+// Periodi storici in cui ciascuna squadra ha militato in Serie A.
+// Range [startYear, endYear] inclusivi (anno = inizio stagione).
+const SERIE_A_HISTORY = {
+  milan:       [[1929, 2026]],
+  inter:       [[1929, 2026]],
+  juventus:    [[1929, 2006], [2007, 2026]],
+  roma:        [[1952, 2026]],
+  lazio:       [[1988, 2026]],
+  fiorentina:  [[1931, 1993], [1994, 2002], [2004, 2026]],
+  napoli:      [[1929, 1998], [2000, 2001], [2007, 2026]],
+  torino:      [[1929, 1959], [1960, 1989], [1990, 1996], [1999, 2000], [2001, 2003], [2005, 2009], [2012, 2026]],
+  sampdoria:   [[1982, 2011], [2012, 2023]],
+  genoa:       [[1929, 1934], [1937, 1965], [1973, 1995], [2007, 2022], [2023, 2026]],
+  atalanta:    [[1937, 1939], [1940, 1958], [1959, 1981], [1984, 1987], [1988, 1994], [1995, 1998], [2000, 2003], [2006, 2010], [2011, 2026]],
+  bologna:     [[1929, 2005], [2008, 2014], [2015, 2026]],
+  parma:       [[1990, 2008], [2009, 2015], [2018, 2024]],
+  udinese:     [[1995, 2026]],
+  cagliari:    [[1964, 2000], [2001, 2014], [2016, 2022], [2023, 2026]],
+  palermo:     [[2004, 2013], [2014, 2017]],
+  reggina:     [[1995, 1997], [1999, 2009]],
+  chievo:      [[2001, 2007], [2008, 2019]],
+  lecce:       [[1985, 1996], [1997, 2007], [2008, 2011], [2019, 2026]],
+  brescia:     [[1994, 1995], [1997, 1998], [1999, 2001], [2003, 2005], [2010, 2011], [2013, 2014], [2019, 2020]],
+  bari:        [[1985, 1997], [2001, 2011]],
+  verona:      [[1985, 1990], [1992, 2002], [2013, 2018], [2019, 2026]],
+  hellas:      [[1985, 1990], [1992, 2002], [2013, 2018], [2019, 2026]],
+  vicenza:     [[1990, 1996], [2000, 2001]],
+  piacenza:    [[1993, 1996], [1997, 2003]],
+  perugia:     [[1996, 2004]],
+  empoli:      [[1986, 1989], [1997, 2002], [2005, 2008], [2014, 2017], [2018, 2019], [2021, 2026]],
+  siena:       [[2003, 2010], [2011, 2013]],
+  livorno:     [[2004, 2008], [2009, 2010], [2013, 2014]],
+  catania:     [[2006, 2014]],
+  cesena:      [[1991, 1994], [2010, 2012], [2014, 2015]],
+  crotone:     [[2016, 2018], [2020, 2021]],
+  benevento:   [[2017, 2018], [2020, 2021]],
+  sassuolo:    [[2013, 2023]],
+  frosinone:   [[2015, 2016], [2018, 2019], [2023, 2024]],
+  spal:        [[2017, 2020]],
+  spezia:      [[2020, 2023]],
+  venezia:     [[1998, 2002], [2021, 2022], [2024, 2025]],
+  salernitana: [[1998, 1999], [2021, 2024]],
+  reggiana:    [[1993, 1995], [1996, 1997]],
+  ancona:      [[1992, 1993], [2003, 2004]],
+  ascoli:      [[1990, 1991]],
+  avellino:    [],
+  foggia:      [[1991, 1995]],
+  messina:     [[2004, 2007]],
+  modena:      [[2002, 2004]],
+  novara:      [[2011, 2012]],
+  pisa:        [[1990, 1991], [2025, 2026]],
+  ternana:     [],
+  triestina:   [],
+  pescara:     [[1990, 1992], [2012, 2013], [2016, 2017]],
+  cremonese:   [[1989, 1992], [1993, 1995], [2022, 2023], [2025, 2026]],
+  monza:       [[2022, 2025]],
+  lecco:       [[2023, 2024]],
+  como:        [[2024, 2026]],
+  lucchese:    [],
+};
 
 let _playerDB = null;
 async function getPlayerDB(env) {
@@ -47,6 +108,21 @@ function clubCareer(rawCarriera) {
   );
 }
 
+// Verifica se uno stint a una squadra ricade in un periodo Serie A reale di quella squadra
+function isStintInSerieA(squadra, anniStr) {
+  if (!squadra || !anniStr) return false;
+  const sq = squadra.toLowerCase();
+  const sy = parseYear(anniStr);
+  const ey = parseYearEnd(anniStr) ?? sy;
+  if (!sy) return false;
+  for (const key of SERIE_A) {
+    if (!sq.includes(key)) continue;
+    const ranges = SERIE_A_HISTORY[key] || [];
+    if (ranges.some(([s, e]) => s <= ey && e >= sy)) return true;
+  }
+  return false;
+}
+
 function detectLoans(carriera) {
   return carriera.map(c => {
     const cs = parseYear(c.anni);
@@ -73,13 +149,11 @@ function isValidPlayer(p) {
   const years = carriera.map(c => parseYear(c.anni)).filter(Boolean);
   if (years.length < carriera.length) return false;
   if (Math.min(...years) < 1990) return false;
-  const hasSerieA = carriera.some(c =>
-    SERIE_A.some(s => c.squadra?.toLowerCase().includes(s))
-  );
-  if (!hasSerieA) return false;
-  const maxAtSerieAClub = Math.max(...carriera
-    .filter(c => SERIE_A.some(s => c.squadra?.toLowerCase().includes(s)))
-    .map(c => c.presenze || 0), 0);
+  // Almeno uno stint in Serie A reale (anni dentro periodo Serie A della squadra)
+  const serieAStints = carriera.filter(c => isStintInSerieA(c.squadra, c.anni));
+  if (serieAStints.length === 0) return false;
+  // Almeno 50 presenze in un singolo stint di Serie A reale
+  const maxAtSerieAClub = Math.max(...serieAStints.map(c => c.presenze || 0), 0);
   if (maxAtSerieAClub < 50) return false;
   return true;
 }
@@ -209,7 +283,7 @@ export default {
         sk: !!env.SUPABASE_KEY,
         assets: !!env.ASSETS,
         cache_id: CACHE_ID,
-        version: "v9-loan-overlap",
+        version: "v10-serie-a-years",
       }), { status: 200, headers: CORS });
     }
     try {
