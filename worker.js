@@ -1,5 +1,5 @@
 const CACHE_TTL = 60 * 60 * 1000;
-const CACHE_ID  = "pool_v10";
+const CACHE_ID  = "pool_v11";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -16,6 +16,68 @@ const SERIE_A = [
   "ancona","ascoli","avellino","foggia","messina","modena","novara","pisa",
   "ternana","triestina","pescara","cremonese","monza","lecco","como","lucchese",
 ];
+
+// Pattern regex strict per ogni club Serie A italiano.
+// Esclude omonimi stranieri (Internacional brasiliana, Inter Zaprešic, etc)
+// e altri club italiani con nome simile (Atletico Roma, Internapoli, etc).
+const TEAM_PATTERNS = {
+  milan:       /^(ac\s+|acf\s+|associazione\s+calcio\s+)?milan$/i,
+  inter:       /^(fc\s+|football\s+club\s+)?(inter|internazionale)(\s+milano?)?$/i,
+  juventus:    /^juventus(\s+(fc|football\s+club))?$/i,
+  roma:        /^(as\s+|associazione\s+sportiva\s+)?roma$/i,
+  lazio:       /^(ss\s+|società\s+sportiva\s+)?lazio$/i,
+  fiorentina:  /^(acf\s+|associazione\s+calcio\s+)?fiorentina$/i,
+  napoli:      /^(ssc\s+|società\s+sportiva\s+calcio\s+)?napoli$/i,
+  torino:      /^torino(\s+(fc|football\s+club|calcio))?$/i,
+  sampdoria:   /^(uc\s+|unione\s+calcio\s+)?sampdoria$/i,
+  genoa:       /^genoa(\s+(cfc|cricket\s+and\s+football\s+club))?$/i,
+  atalanta:    /^atalanta(\s+(bc|bergamasca\s+calcio))?$/i,
+  bologna:     /^bologna(\s+(fc|football\s+club))?(\s+1909)?$/i,
+  parma:       /^parma(\s+(fc|calcio))?(\s+1913)?$/i,
+  udinese:     /^udinese(\s+calcio)?$/i,
+  cagliari:    /^cagliari(\s+calcio)?$/i,
+  palermo:     /^palermo(\s+(fc|football\s+club|calcio))?$/i,
+  reggina:     /^reggina(\s+1914)?$/i,
+  chievo:      /^(ac\s+|associazione\s+calcio\s+)?chievo(\s*verona)?$|^chievoverona$/i,
+  lecce:       /^(us\s+|unione\s+sportiva\s+)?lecce$/i,
+  brescia:     /^brescia(\s+calcio)?$/i,
+  bari:        /^(ssc\s+|società\s+sportiva\s+calcio\s+|as\s+|fc\s+)?bari$/i,
+  verona:      /^(h\.\s*|hellas\s+)?verona$|^hellas\s+verona(\s+fc)?$/i,
+  hellas:      /^hellas\s+verona(\s+fc)?$/i,
+  vicenza:     /^(l\.r\.\s+)?vicenza(\s+(calcio|virtus))?$/i,
+  piacenza:    /^piacenza(\s+calcio)?(\s+1919)?$/i,
+  perugia:     /^(ac\s+)?perugia(\s+calcio)?$/i,
+  empoli:      /^empoli(\s+football\s+club)?$/i,
+  siena:       /^(ac\s+|robur\s+)?siena(\s+football\s+club)?$/i,
+  livorno:     /^(us\s+|associazione\s+sportiva\s+)?livorno(\s+1915)?$/i,
+  catania:     /^catania(\s+(football\s+club|calcio))?$/i,
+  cesena:      /^cesena(\s+football\s+club)?$/i,
+  crotone:     /^(fc\s+)?crotone$/i,
+  benevento:   /^benevento(\s+calcio)?$/i,
+  sassuolo:    /^(unione\s+sportiva\s+sassuolo\s+calcio|us\s+sassuolo(\s+calcio)?|sassuolo(\s+calcio)?)$/i,
+  frosinone:   /^frosinone(\s+calcio)?$/i,
+  spal:        /^(s\.p\.a\.l\.|spal)$/i,
+  spezia:      /^spezia(\s+calcio)?$/i,
+  venezia:     /^venezia(\s+(fc|calcio))?$|^calcio\s+venezia$/i,
+  salernitana: /^(us\s+|unione\s+sportiva\s+)?salernitana(\s+1919)?$/i,
+  reggiana:    /^(ac\s+)?reggiana(\s+1919)?$/i,
+  ancona:      /^(società\s+sportiva\s+calcio\s+|us\s+|ssc\s+)?ancona$/i,
+  ascoli:      /^ascoli(\s+calcio(\s+1898\s+fc)?)?$/i,
+  avellino:    /^(us\s+|unione\s+sportiva\s+)?avellino(\s+1912)?$/i,
+  foggia:      /^(calcio\s+)?foggia(\s+1920)?$/i,
+  messina:     /^(acr\s+|fc\s+)?messina$/i,
+  modena:      /^modena(\s+football\s+club(\s+2018)?)?$/i,
+  novara:      /^novara(\s+fc|\s+calcio)?$/i,
+  pisa:        /^pisa(\s+sporting\s+club|\s+calcio)?$/i,
+  ternana:     /^ternana(\s+calcio)?$/i,
+  triestina:   /^(us\s+)?triestina(\s+calcio\s+1918)?$/i,
+  pescara:     /^(delfino\s+)?pescara(\s+1936)?(\s+calcio)?$/i,
+  cremonese:   /^(us\s+|unione\s+sportiva\s+)?cremonese$/i,
+  monza:       /^(ac\s+|associazione\s+calcio\s+)?monza$/i,
+  lecco:       /^(calcio\s+)?lecco(\s+1912)?$/i,
+  como:        /^como(\s+(1907|2000))?$/i,
+  lucchese:    /^lucchese(\s+1905)?$/i,
+};
 
 // Periodi storici in cui ciascuna squadra ha militato in Serie A.
 // Range [startYear, endYear] inclusivi (anno = inizio stagione).
@@ -111,12 +173,12 @@ function clubCareer(rawCarriera) {
 // Verifica se uno stint a una squadra ricade in un periodo Serie A reale di quella squadra
 function isStintInSerieA(squadra, anniStr) {
   if (!squadra || !anniStr) return false;
-  const sq = squadra.toLowerCase();
+  const sq = squadra.trim();
   const sy = parseYear(anniStr);
   const ey = parseYearEnd(anniStr) ?? sy;
   if (!sy) return false;
-  for (const key of SERIE_A) {
-    if (!sq.includes(key)) continue;
+  for (const [key, pat] of Object.entries(TEAM_PATTERNS)) {
+    if (!pat.test(sq)) continue;
     const ranges = SERIE_A_HISTORY[key] || [];
     if (ranges.some(([s, e]) => s <= ey && e >= sy)) return true;
   }
