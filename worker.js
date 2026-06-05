@@ -124,19 +124,32 @@ function isStintInSerieA(squadra, anniStr) {
 }
 
 function detectLoans(carriera) {
+  // Aggrega range e apps per club (mergia entry dello stesso club)
+  const clubs = {};
+  for (const c of carriera) {
+    const cs = parseYear(c.anni);
+    const ce = parseYearEnd(c.anni) ?? cs;
+    if (!cs) continue;
+    const k = c.squadra;
+    if (!clubs[k]) {
+      clubs[k] = { start: cs, end: ce, totalApps: 0 };
+    } else {
+      clubs[k].start = Math.min(clubs[k].start, cs);
+      clubs[k].end   = Math.max(clubs[k].end, ce);
+    }
+    clubs[k].totalApps += (c.presenze || 0);
+  }
+  // Uno stint con apps>0 è prestito se esiste un altro club il cui range
+  // mergiato lo CONTIENE STRETTAMENTE (almeno un confine strettamente esterno)
   return carriera.map(c => {
     const cs = parseYear(c.anni);
     const ce = parseYearEnd(c.anni) ?? cs;
-    if (!cs) return c;
-    if (!c.presenze) return c;
-    const isLoan = carriera.some(other => {
-      if (other === c) return false;
-      if (other.squadra === c.squadra) return false;
-      if ((other.presenze || 0) !== 0) return false;
-      const os = parseYear(other.anni);
-      const oe = parseYearEnd(other.anni) ?? os;
-      if (!os) return false;
-      return os <= ce && oe >= cs;
+    if (!cs || !c.presenze) return c;
+    const isLoan = Object.entries(clubs).some(([sq, info]) => {
+      if (sq === c.squadra) return false;
+      if (!(info.start <= cs && info.end >= ce)) return false;
+      // Almeno un confine deve essere strettamente esterno
+      return info.start < cs || info.end > ce;
     });
     return isLoan ? { ...c, prestito: true } : c;
   });
