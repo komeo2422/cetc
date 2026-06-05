@@ -55,7 +55,6 @@ window.cacca = async function() {
       await Promise.all(keys.map(k => caches.delete(k)));
     }
   } catch(e) { console.warn('cacca cleanup:', e); }
-  // hard reload with cache bypass
   location.href = location.pathname + '?' + Date.now();
 };
 </script>
@@ -83,7 +82,7 @@ const S = {
   showLbInGame:false, lbData:null
 };
 
-// ── API ────────────────────────────────────────────────────────────────────
+// API
 async function fetchPlayer(){
   const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({diff:'any'})});
   if(!r.ok) throw new Error('API error');
@@ -105,7 +104,7 @@ async function loadQ(){
   }
 }
 
-// ── LEADERBOARD ────────────────────────────────────────────────────────────
+// Leaderboard
 async function lbLoad(){
   try{
     const r=await fetch('/api/scores');
@@ -118,18 +117,17 @@ async function lbSave(pts){
   catch(e){console.warn('lb',e);}
 }
 
-// ── GAME ───────────────────────────────────────────────────────────────────
+// Game
 function checkAns(){
   const ans=S.answer.trim();if(!ans||!S.player||S.result)return;
   const n=nrm(ans);
-  // Accetta: nome completo, qualunque parola del nome >=2 caratteri (cognome incluso),
+  // Accetta: nome completo, qualunque parola del nome >=2 chars (cognome incluso),
   // o le ultime 2-3 parole concatenate (es. "dos santos")
   const ok=[S.player.nome,...(S.player.nomi_alternativi||[])].map(nrm)
     .some(a=>{
       if(n===a) return true;
       const ws=a.split(' ').filter(w=>w.length>=2);
       if(ws.some(w=>n===w)) return true;
-      // multi-word suffix match (last 2 or 3 words)
       for(let k=2;k<=Math.min(3,ws.length);k++){
         if(n===ws.slice(-k).join(' ')) return true;
       }
@@ -161,7 +159,7 @@ function useHint(){
 }
 function surrender(){if(S.result)return;S.result={correct:false,pts:0};S.q++;lbSave(0);render();}
 
-// ── SCREENS ────────────────────────────────────────────────────────────────
+// Screens
 function scSetname(){return`
   <div style="display:flex;flex-direction:column;justify-content:center;min-height:90dvh;padding:20px 0">
     <div style="text-align:center;margin-bottom:36px">
@@ -346,7 +344,6 @@ function scFinal(){
   `;
 }
 
-// ── RENDER ──────────────────────────────────────────────────────────────────
 function render(){
   if(S.screen==='leaderboard'){scLeaderboard();return;}
   const map={setname:scSetname,home:scHome,loading:scLoading,playing:scPlaying,final:scFinal};
@@ -370,4 +367,30 @@ function bind(){
   on('btn-lb-f',()=>{S.screen='leaderboard';render();});
   on('btn-back',()=>{S.screen=S.q>0?'final':'home';render();});
   on('btn-chname',()=>{LS.removeItem('cetc_user');S.username='';S.screen='setname';render();});
-  on('bt
+  on('btn-again',()=>{S.score=0;S.q=0;S.player=null;S.result=null;S.answer='';S.screen='home';render();});
+  on('btn-next',()=>loadQ());
+  on('btn-check',checkAns);
+  on('btn-sur',surrender);
+  on('btn-hint',useHint);
+  on('btn-lb-game',async()=>{
+    S.showLbInGame=!S.showLbInGame;
+    if(S.showLbInGame){
+      try{const r=await fetch('/api/scores');S.lbData=r.ok?await r.json():[];}
+      catch{S.lbData=[];}
+    }
+    render();
+  });
+
+  const ai=document.getElementById('ai');
+  if(ai){
+    ai.addEventListener('input',e=>{S.answer=e.target.value;});
+    ai.addEventListener('keydown',e=>{if(e.key==='Enter')checkAns();});
+    setTimeout(()=>ai.focus(),50);
+  }
+}
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+render();
+</script>
+</body>
+</html>
