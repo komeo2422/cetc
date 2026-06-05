@@ -39,7 +39,26 @@ td{padding:8px 10px;border-top:1px solid #f0f0f0}
 </head>
 <body>
 <div id="app"></div>
-<div style="position:fixed;bottom:6px;right:8px;font-size:10px;color:#ccc;letter-spacing:1px;pointer-events:none;user-select:none">v.0000011</div>
+<div style="position:fixed;bottom:6px;right:8px;font-size:10px;color:#ccc;letter-spacing:1px;user-select:none;display:flex;gap:8px;align-items:center;z-index:9999">
+  <span style="pointer-events:none">v.0000011</span>
+  <button onclick="window.cacca()" style="border:1px solid #ddd;background:#fff;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;color:#888;font-family:inherit">cacca</button>
+</div>
+<script>
+window.cacca = async function() {
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+    if ('caches' in window) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k)));
+    }
+  } catch(e) { console.warn('cacca cleanup:', e); }
+  // hard reload with cache bypass
+  location.href = location.pathname + '?' + Date.now();
+};
+</script>
 <script>
 const LS = localStorage;
 const TIERS=[
@@ -351,30 +370,4 @@ function bind(){
   on('btn-lb-f',()=>{S.screen='leaderboard';render();});
   on('btn-back',()=>{S.screen=S.q>0?'final':'home';render();});
   on('btn-chname',()=>{LS.removeItem('cetc_user');S.username='';S.screen='setname';render();});
-  on('btn-again',()=>{S.score=0;S.q=0;S.player=null;S.result=null;S.answer='';S.screen='home';render();});
-  on('btn-next',()=>loadQ());
-  on('btn-check',checkAns);
-  on('btn-sur',surrender);
-  on('btn-hint',useHint);
-  on('btn-lb-game',async()=>{
-    S.showLbInGame=!S.showLbInGame;
-    if(S.showLbInGame){
-      try{const r=await fetch('/api/scores');S.lbData=r.ok?await r.json():[];}
-      catch{S.lbData=[];}
-    }
-    render();
-  });
-
-  const ai=document.getElementById('ai');
-  if(ai){
-    ai.addEventListener('input',e=>{S.answer=e.target.value;});
-    ai.addEventListener('keydown',e=>{if(e.key==='Enter')checkAns();});
-    setTimeout(()=>ai.focus(),50);
-  }
-}
-
-if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
-render();
-</script>
-</body>
-</html>
+  on('bt
