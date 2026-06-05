@@ -39,6 +39,7 @@ td{padding:8px 10px;border-top:1px solid #f0f0f0}
 </head>
 <body>
 <div id="app"></div>
+<div style="position:fixed;bottom:6px;right:8px;font-size:10px;color:#ccc;letter-spacing:1px;pointer-events:none;user-select:none">v.0000011</div>
 <script>
 const LS = localStorage;
 const TIERS=[
@@ -358,4 +359,22 @@ function bind(){
   on('btn-lb-game',async()=>{
     S.showLbInGame=!S.showLbInGame;
     if(S.showLbInGame){
-      try{const r=await fetch('/api/scores
+      try{const r=await fetch('/api/scores');S.lbData=r.ok?await r.json():[];}
+      catch{S.lbData=[];}
+    }
+    render();
+  });
+
+  const ai=document.getElementById('ai');
+  if(ai){
+    ai.addEventListener('input',e=>{S.answer=e.target.value;});
+    ai.addEventListener('keydown',e=>{if(e.key==='Enter')checkAns();});
+    setTimeout(()=>ai.focus(),50);
+  }
+}
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
+render();
+</script>
+</body>
+</html>

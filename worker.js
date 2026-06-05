@@ -304,6 +304,15 @@ async function handleAsk(request, env) {
   return new Response(JSON.stringify({ error: "No valid player found after retries" }), { status: 500, headers: CORS });
 }
 
+async function handleReset(env) {
+  // Cancella tutte le righe della leaderboard
+  await fetch(
+    `${env.SUPABASE_URL}/rest/v1/leaderboard?username=not.is.null`,
+    { method: "DELETE", headers: sbH(env.SUPABASE_KEY) }
+  );
+  return new Response(JSON.stringify({ ok: true, msg: "leaderboard cleared" }), { status: 200, headers: CORS });
+}
+
 async function handleScoresGet(env) {
   const res = await fetch(
     `${env.SUPABASE_URL}/rest/v1/leaderboard?select=*&order=avg_score.desc`,
@@ -356,6 +365,7 @@ export default {
       if (path === "/api/ask"    && method === "POST") return await handleAsk(request, env);
       if (path === "/api/scores" && method === "GET")  return await handleScoresGet(env);
       if (path === "/api/scores" && method === "POST") return await handleScoresPost(request, env);
+      if (path === "/api/reset"  && method === "POST") return await handleReset(env);
     } catch (e) {
       return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: CORS });
     }
